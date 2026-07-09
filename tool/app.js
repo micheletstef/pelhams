@@ -6,7 +6,6 @@ pdfjsLib.GlobalWorkerOptions.workerSrc =
 const $ = (id) => document.getElementById(id);
 
 const els = {
-  dropzone: $("dropzone"),
   fileInput: $("file-input"),
   fileLabel: $("file-label"),
   pdfPage: $("pdf-page"),
@@ -67,7 +66,7 @@ const DEFAULTS = {
   outW: 1600,
   outH: 2000,
   bgMode: "transparent",
-  bgColor: "#2a1408",
+  bgColor: "#808080",
   pdfPage: 1,
   sourceDpi: 300,
 };
@@ -298,9 +297,9 @@ function drawGuides(ctx, width, height, controls) {
   const right = width * (1 - crop);
 
   ctx.save();
-  ctx.strokeStyle = "rgba(255, 210, 120, 0.55)";
+  ctx.strokeStyle = "rgba(0, 0, 0, 0.45)";
   ctx.lineWidth = Math.max(1, width * 0.0015);
-  ctx.setLineDash([8, 6]);
+  ctx.setLineDash([6, 4]);
   ctx.beginPath();
   ctx.moveTo(left, 0);
   ctx.lineTo(left, height);
@@ -309,10 +308,7 @@ function drawGuides(ctx, width, height, controls) {
   ctx.moveTo(width / 2, 0);
   ctx.lineTo(width / 2, height);
   ctx.stroke();
-
-  // cylinder face bounds
   ctx.setLineDash([]);
-  ctx.strokeStyle = "rgba(255, 210, 120, 0.28)";
   ctx.strokeRect(left, 0, right - left, height);
   ctx.restore();
 }
@@ -549,19 +545,12 @@ function bindUi() {
     if (file) onFile(file);
   });
 
+  // Allow dropping a file anywhere on the page
   ["dragenter", "dragover"].forEach((evt) => {
-    els.dropzone.addEventListener(evt, (e) => {
-      e.preventDefault();
-      els.dropzone.classList.add("dragover");
-    });
+    document.addEventListener(evt, (e) => e.preventDefault());
   });
-  ["dragleave", "drop"].forEach((evt) => {
-    els.dropzone.addEventListener(evt, (e) => {
-      e.preventDefault();
-      els.dropzone.classList.remove("dragover");
-    });
-  });
-  els.dropzone.addEventListener("drop", (e) => {
+  document.addEventListener("drop", (e) => {
+    e.preventDefault();
     const file = e.dataTransfer?.files?.[0];
     if (file) onFile(file);
   });
