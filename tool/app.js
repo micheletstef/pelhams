@@ -1060,12 +1060,24 @@ async function exportWarpedSvg(controls) {
 }
 
 async function svgTextToPdfBlob(svgText, controls) {
-  const { jsPDF } = await import("https://cdn.jsdelivr.net/npm/jspdf@2.5.2/+esm");
-  await import("https://cdn.jsdelivr.net/npm/svg2pdf.js@2.2.3/+esm");
+  // Load UMD builds so svg2pdf can attach to the same jsPDF instance.
+  // The ESM build exports svg2pdf(el, pdf, opts) and does not reliably patch doc.svg.
+  await loadScriptOnce(
+    "jspdf-umd",
+    "https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js",
+  );
+  await loadScriptOnce(
+    "svg2pdf-umd",
+    "https://cdn.jsdelivr.net/npm/svg2pdf.js@2.2.3/dist/svg2pdf.umd.min.js",
+  );
+
+  const jsPDFCtor = window.jspdf?.jsPDF || window.jsPDF;
+  const svg2pdfFn = window.svg2pdf;
+  if (!jsPDFCtor) throw new Error("jsPDF failed to load");
 
   const pageW = controls.outW * 0.75;
   const pageH = controls.outH * 0.75;
-  const doc = new jsPDF({ unit: "pt", format: [pageW, pageH], compress: true });
+  const doc = new jsPDFCtor({ unit: "pt", format: [pageW, pageH], compress: true });
 
   const container = document.createElement("div");
   container.style.cssText = "position:fixed;left:-10000px;top:0;overflow:hidden;";
@@ -1074,11 +1086,33 @@ async function svgTextToPdfBlob(svgText, controls) {
   if (!svgEl) throw new Error("Failed to build warped SVG");
   document.body.appendChild(container);
   try {
-    await doc.svg(svgEl, { x: 0, y: 0, width: pageW, height: pageH });
+    if (typeof doc.svg === "function") {
+      await doc.svg(svgEl, { x: 0, y: 0, width: pageW, height: pageH });
+    } else if (typeof svg2pdfFn === "function") {
+      await svg2pdfFn(svgEl, doc, { x: 0, y: 0, width: pageW, height: pageH });
+    } else {
+      throw new Error("svg2pdf failed to load");
+    }
   } finally {
     container.remove();
   }
   return doc.output("blob");
+}
+
+function loadScriptOnce(id, src) {
+  return new Promise((resolve, reject) => {
+    if (document.getElementById(id)) {
+      resolve();
+      return;
+    }
+    const s = document.createElement("script");
+    s.id = id;
+    s.src = src;
+    s.async = true;
+    s.onload = () => resolve();
+    s.onerror = () => reject(new Error(`Failed to load ${src}`));
+    document.head.appendChild(s);
+  });
 }
 
 async function exportSvg() {
