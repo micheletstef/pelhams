@@ -87,22 +87,20 @@ input[type="number"] {
 .viewport {
   flex: 1;
   overflow: auto;
-  padding: 12px;
-  background:
-    linear-gradient(45deg, #eee 25%, transparent 25%),
-    linear-gradient(-45deg, #eee 25%, transparent 25%),
-    linear-gradient(45deg, transparent 75%, #eee 75%),
-    linear-gradient(-45deg, transparent 75%, #eee 75%);
-  background-size: 16px 16px;
-  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
-  background-color: #fff;
+  padding: 24px;
+  background: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 #preview {
   display: block;
   max-width: 100%;
+  max-height: 100%;
+  width: auto;
   height: auto;
-  border: 1px solid #999;
+  border: 1px solid #000;
   background: #fff;
 }
 
