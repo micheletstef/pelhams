@@ -512,231 +512,297 @@ function parseSvgSize(svgText) {
   return { w, h, root, parsed };
 }
 
-/** Load legacy pdf.js once (needed for SVGGraphics, removed in pdf.js 4). */
-let legacyPdfjsPromise = null;
-function loadLegacyPdfjs() {
-  if (legacyPdfjsPromise) return legacyPdfjsPromise;
-  legacyPdfjsPromise = new Promise((resolve, reject) => {
-    if (window.pdfjsLib?.SVGGraphics) {
-      resolve(window.pdfjsLib);
-      return;
-    }
-    const s = document.createElement("script");
-    s.src = "https://cdn.jsdelivr.net/npm/pdfjs-dist@2.16.105/legacy/build/pdf.min.js";
-    s.onload = () => {
-      const lib = window.pdfjsLib;
-      if (!lib?.SVGGraphics) {
-        reject(new Error("Legacy pdf.js SVGGraphics unavailable"));
-        return;
-      }
-      lib.GlobalWorkerOptions.workerSrc =
-        "https://cdn.jsdelivr.net/npm/pdfjs-dist@2.16.105/legacy/build/pdf.worker.min.js";
-      resolve(lib);
-    };
-    s.onerror = () => reject(new Error("Failed to load legacy pdf.js"));
-    document.head.appendChild(s);
-  });
-  return legacyPdfjsPromise;
-}
-
-async function pdfPageToSvgText(pdfBytes, pageNum) {
-  const legacy = await loadLegacyPdfjs();
-  const doc = await legacy.getDocument({ data: pdfBytes.slice(0) }).promise;
-  const page = await doc.getPage(Math.max(1, pageNum));
-  const viewport = page.getViewport({ scale: 1 });
-  const opList = await page.getOperatorList();
-  const gfx = new legacy.SVGGraphics(page.commonObjs, page.objs);
-  gfx.embedFonts = true;
-  const svgEl = await gfx.getSVG(opList, viewport);
-  // Ensure viewBox matches page size
-  if (!svgEl.getAttribute("viewBox")) {
-    svgEl.setAttribute("viewBox", `0 0 ${viewport.width} ${viewport.height}`);
-  }
-  svgEl.setAttribute("width", String(viewport.width));
-  svgEl.setAttribute("height", String(viewport.height));
-  return {
-    svgText: new XMLSerializer().serializeToString(svgEl),
-    w: viewport.width,
-    h: viewport.height,
-  };
-}
-
-function getLocalToRootMatrix(el, root) {
-  try {
-    const ctm = el.getCTM();
-    const rootCtm = root.getCTM();
-    if (!ctm || !rootCtm) return null;
-    return rootCtm.inverse().multiply(ctm);
-  } catch {
-    return null;
-  }
-}
-
-function applyMatrix(m, x, y) {
-  if (!m) return { x, y };
-  return {
-    x: m.a * x + m.c * y + m.e,
-    y: m.b * x + m.d * y + m.f,
-  };
-}
-
-function cubicPoint(p0, p1, p2, p3, t) {
-  const mt = 1 - t;
-  return {
-    x: mt * mt * mt * p0.x + 3 * mt * mt * t * p1.x + 3 * mt * t * t * p2.x + t * t * t * p3.x,
-    y: mt * mt * mt * p0.y + 3 * mt * mt * t * p1.y + 3 * mt * t * t * p2.y + t * t * t * p3.y,
-  };
-}
-
-function quadPoint(p0, p1, p2, t) {
-  const mt = 1 - t;
-  return {
-    x: mt * mt * p0.x + 2 * mt * t * p1.x + t * t * p2.x,
-    y: mt * mt * p0.y + 2 * mt * t * p1.y + t * t * p2.y,
-  };
-}
-
 function fmt(n) {
   return (Math.round(n * 1000) / 1000).toString();
 }
 
+function mulMat(a, b) {
+  return [
+    a[0] * b[0] + a[2] * b[1],
+    a[1] * b[0] + a[3] * b[1],
+    a[0] * b[2] + a[2] * b[3],
+    a[1] * b[2] + a[3] * b[3],
+    a[0] * b[4] + a[2] * b[5] + a[4],
+    a[1] * b[4] + a[3] * b[5] + a[5],
+  ];
+}
+
+function applyMat(m, x, y) {
+  return { x: m[0] * x + m[2] * y + m[4], y: m[1] * x + m[3] * y + m[5] };
+}
+
+function colorToCss(args) {
+  if (!args || !args.length) return "#000";
+  if (args.length === 1) {
+    const g = Math.round(args[0] * 255);
+    return `rgb(${g},${g},${g})`;
+  }
+  if (args.length >= 3) {
+    return `rgb(${Math.round(args[0] * 255)},${Math.round(args[1] * 255)},${Math.round(args[2] * 255)})`;
+  }
+  return "#000";
+}
+
 /**
- * Warp an SVG path `d` from source space into output space.
- * Curves are subdivided so the wrap stays smooth without strip slicing.
+ * Extract filled/stroked vector paths from a PDF page via pdf.js operator list.
+ * Coordinates are converted to SVG top-left space (Y flipped).
  */
-function warpPathD(d, matrix, controls, srcW, srcH, outW, outH, detail) {
-  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-  path.setAttribute("d", d);
-  svg.appendChild(path);
-  let segs;
-  try {
-    segs = path.getPathData({ normalize: true });
-  } catch {
-    // Safari / older: use path-data-polyfill fallback via manual parse
-    segs = null;
-  }
+async function extractPdfVectorPaths(pdfBytes, pageNum) {
+  const doc = await pdfjsLib.getDocument({ data: pdfBytes.slice(0) }).promise;
+  const page = await doc.getPage(Math.max(1, pageNum));
+  const viewport = page.getViewport({ scale: 1 });
+  const pageW = viewport.width;
+  const pageH = viewport.height;
+  const opList = await page.getOperatorList();
+  const OPS = pdfjsLib.OPS;
 
-  if (!segs) {
-    // Minimal fallback: sample the path length
-    const len = path.getTotalLength();
-    if (!len) return "";
-    const steps = Math.max(8, Math.ceil(len / Math.max(2, 20 / detail)));
-    const parts = [];
-    for (let i = 0; i <= steps; i++) {
-      const p = path.getPointAtLength((i / steps) * len);
-      const local = applyMatrix(matrix, p.x, p.y);
-      const u = local.x / srcW;
-      const v = local.y / srcH;
-      const out = sourceUVToOutputXY(u, v, controls, outW, outH);
-      parts.push(`${i === 0 ? "M" : "L"}${fmt(out.x)} ${fmt(out.y)}`);
-    }
-    return parts.join(" ");
-  }
+  const stack = [];
+  let ctm = [1, 0, 0, 1, 0, 0];
+  let fillColor = "#000";
+  let strokeColor = "#000";
+  let fillAlpha = 1;
+  let strokeAlpha = 1;
+  let lineWidth = 1;
+  /** @type {{ d: string, fill: string|null, stroke: string|null, fillRule: string, strokeWidth: number }[]} */
+  const paths = [];
 
-  const out = [];
-  let cx = 0;
-  let cy = 0;
-  let sx = 0;
-  let sy = 0;
-
-  const mapPt = (x, y) => {
-    const local = applyMatrix(matrix, x, y);
-    return sourceUVToOutputXY(local.x / srcW, local.y / srcH, controls, outW, outH);
+  const toSvg = (x, y) => {
+    const p = applyMat(ctm, x, y);
+    // PDF y-up → SVG y-down
+    return { x: p.x, y: pageH - p.y };
   };
 
-  for (const seg of segs) {
-    const v = seg.values;
-    switch (seg.type) {
-      case "M": {
-        const p = mapPt(v[0], v[1]);
-        out.push(`M${fmt(p.x)} ${fmt(p.y)}`);
-        cx = sx = v[0];
-        cy = sy = v[1];
-        break;
-      }
-      case "L": {
-        const p = mapPt(v[0], v[1]);
-        out.push(`L${fmt(p.x)} ${fmt(p.y)}`);
-        cx = v[0];
-        cy = v[1];
-        break;
-      }
-      case "C": {
-        const p0 = { x: cx, y: cy };
-        const p1 = { x: v[0], y: v[1] };
-        const p2 = { x: v[2], y: v[3] };
-        const p3 = { x: v[4], y: v[5] };
-        for (let i = 1; i <= detail; i++) {
-          const t = i / detail;
-          const pt = cubicPoint(p0, p1, p2, p3, t);
-          const w = mapPt(pt.x, pt.y);
-          out.push(`L${fmt(w.x)} ${fmt(w.y)}`);
-        }
-        cx = p3.x;
-        cy = p3.y;
-        break;
-      }
-      case "Q": {
-        const p0 = { x: cx, y: cy };
-        const p1 = { x: v[0], y: v[1] };
-        const p2 = { x: v[2], y: v[3] };
-        for (let i = 1; i <= detail; i++) {
-          const t = i / detail;
-          const pt = quadPoint(p0, p1, p2, t);
-          const w = mapPt(pt.x, pt.y);
-          out.push(`L${fmt(w.x)} ${fmt(w.y)}`);
-        }
-        cx = p2.x;
-        cy = p2.y;
-        break;
-      }
-      case "Z":
-      case "z": {
-        out.push("Z");
-        cx = sx;
-        cy = sy;
-        break;
-      }
-      default: {
-        // Unsupported command after normalize — skip
-        break;
+  const emitPath = (ops, args, paint) => {
+    const parts = [];
+    let j = 0;
+    let x = 0;
+    let y = 0;
+    for (let i = 0; i < ops.length; i++) {
+      const op = ops[i] | 0;
+      if (op === OPS.rectangle) {
+        const rx = args[j++];
+        const ry = args[j++];
+        const rw = args[j++];
+        const rh = args[j++];
+        const p0 = toSvg(rx, ry);
+        const p1 = toSvg(rx + rw, ry);
+        const p2 = toSvg(rx + rw, ry + rh);
+        const p3 = toSvg(rx, ry + rh);
+        parts.push(`M${fmt(p0.x)} ${fmt(p0.y)}`);
+        parts.push(`L${fmt(p1.x)} ${fmt(p1.y)}`);
+        parts.push(`L${fmt(p2.x)} ${fmt(p2.y)}`);
+        parts.push(`L${fmt(p3.x)} ${fmt(p3.y)} Z`);
+        x = rx;
+        y = ry;
+      } else if (op === OPS.moveTo) {
+        x = args[j++];
+        y = args[j++];
+        const p = toSvg(x, y);
+        parts.push(`M${fmt(p.x)} ${fmt(p.y)}`);
+      } else if (op === OPS.lineTo) {
+        x = args[j++];
+        y = args[j++];
+        const p = toSvg(x, y);
+        parts.push(`L${fmt(p.x)} ${fmt(p.y)}`);
+      } else if (op === OPS.curveTo) {
+        const x1 = args[j++];
+        const y1 = args[j++];
+        const x2 = args[j++];
+        const y2 = args[j++];
+        x = args[j++];
+        y = args[j++];
+        const c1 = toSvg(x1, y1);
+        const c2 = toSvg(x2, y2);
+        const p = toSvg(x, y);
+        parts.push(`C${fmt(c1.x)} ${fmt(c1.y)} ${fmt(c2.x)} ${fmt(c2.y)} ${fmt(p.x)} ${fmt(p.y)}`);
+      } else if (op === OPS.curveTo2) {
+        const x1 = x;
+        const y1 = y;
+        const x2 = args[j++];
+        const y2 = args[j++];
+        x = args[j++];
+        y = args[j++];
+        const c1 = toSvg(x1, y1);
+        const c2 = toSvg(x2, y2);
+        const p = toSvg(x, y);
+        parts.push(`C${fmt(c1.x)} ${fmt(c1.y)} ${fmt(c2.x)} ${fmt(c2.y)} ${fmt(p.x)} ${fmt(p.y)}`);
+      } else if (op === OPS.curveTo3) {
+        const x1 = args[j++];
+        const y1 = args[j++];
+        x = args[j++];
+        y = args[j++];
+        const c1 = toSvg(x1, y1);
+        const p = toSvg(x, y);
+        parts.push(`C${fmt(c1.x)} ${fmt(c1.y)} ${fmt(p.x)} ${fmt(p.y)} ${fmt(p.x)} ${fmt(p.y)}`);
+      } else if (op === OPS.closePath) {
+        parts.push("Z");
       }
     }
-  }
-  return out.join(" ");
-}
 
-function ensurePathDataPolyfill() {
-  if (SVGPathElement.prototype.getPathData) return Promise.resolve();
-  return new Promise((resolve, reject) => {
-    const s = document.createElement("script");
-    s.src = "https://cdn.jsdelivr.net/npm/path-data-polyfill@1.0.4/path-data-polyfill.min.js";
-    s.onload = () => resolve();
-    s.onerror = () => reject(new Error("Failed to load path-data-polyfill"));
-    document.head.appendChild(s);
-  });
+    const d = parts.join(" ");
+    if (!d) return;
+
+    const doFill = paint.fill;
+    const doStroke = paint.stroke;
+    const scale = Math.hypot(ctm[0], ctm[1]) || 1;
+    paths.push({
+      d,
+      fill: doFill ? fillColor : "none",
+      stroke: doStroke ? strokeColor : "none",
+      fillRule: paint.eo ? "evenodd" : "nonzero",
+      fillOpacity: doFill ? fillAlpha : 1,
+      strokeOpacity: doStroke ? strokeAlpha : 1,
+      strokeWidth: doStroke ? Math.max(0.15, lineWidth * scale) : 0,
+    });
+  };
+
+  for (let i = 0; i < opList.fnArray.length; i++) {
+    const fn = opList.fnArray[i];
+    const args = opList.argsArray[i];
+
+    switch (fn) {
+      case OPS.save:
+        stack.push({
+          ctm: ctm.slice(),
+          fillColor,
+          strokeColor,
+          fillAlpha,
+          strokeAlpha,
+          lineWidth,
+        });
+        break;
+      case OPS.restore: {
+        const s = stack.pop();
+        if (s) {
+          ctm = s.ctm;
+          fillColor = s.fillColor;
+          strokeColor = s.strokeColor;
+          fillAlpha = s.fillAlpha;
+          strokeAlpha = s.strokeAlpha;
+          lineWidth = s.lineWidth;
+        }
+        break;
+      }
+      case OPS.transform:
+        ctm = mulMat(ctm, args);
+        break;
+      case OPS.setFillRGBColor:
+      case OPS.setFillGray:
+      case OPS.setFillColor:
+        fillColor = colorToCss(args);
+        break;
+      case OPS.setFillCMYKColor:
+        if (args?.length >= 4) {
+          const [c, m, y, k] = args;
+          fillColor = colorToCss([
+            (1 - c) * (1 - k),
+            (1 - m) * (1 - k),
+            (1 - y) * (1 - k),
+          ]);
+        }
+        break;
+      case OPS.setStrokeRGBColor:
+      case OPS.setStrokeGray:
+      case OPS.setStrokeColor:
+        strokeColor = colorToCss(args);
+        break;
+      case OPS.setStrokeCMYKColor:
+        if (args?.length >= 4) {
+          const [c, m, y, k] = args;
+          strokeColor = colorToCss([
+            (1 - c) * (1 - k),
+            (1 - m) * (1 - k),
+            (1 - y) * (1 - k),
+          ]);
+        }
+        break;
+      case OPS.setLineWidth:
+        lineWidth = args[0] || 1;
+        break;
+      case OPS.setGState:
+        if (Array.isArray(args)) {
+          for (const entry of args) {
+            const key = entry?.[0];
+            const value = entry?.[1];
+            if (key === "ca") fillAlpha = value;
+            else if (key === "CA") strokeAlpha = value;
+            else if (key === "LW") lineWidth = value;
+          }
+        }
+        break;
+      case OPS.constructPath: {
+        // Look ahead for paint op (allow color/gstate ops in between)
+        let paint = null;
+        for (let k = i + 1; k < Math.min(i + 12, opList.fnArray.length); k++) {
+          const next = opList.fnArray[k];
+          if (
+            next === OPS.fill ||
+            next === OPS.eoFill ||
+            next === OPS.stroke ||
+            next === OPS.closeStroke ||
+            next === OPS.fillStroke ||
+            next === OPS.eoFillStroke ||
+            next === OPS.closeFillStroke ||
+            next === OPS.closeEOFillStroke
+          ) {
+            paint = {
+              fill:
+                next === OPS.fill ||
+                next === OPS.eoFill ||
+                next === OPS.fillStroke ||
+                next === OPS.eoFillStroke ||
+                next === OPS.closeFillStroke ||
+                next === OPS.closeEOFillStroke,
+              stroke:
+                next === OPS.stroke ||
+                next === OPS.closeStroke ||
+                next === OPS.fillStroke ||
+                next === OPS.eoFillStroke ||
+                next === OPS.closeFillStroke ||
+                next === OPS.closeEOFillStroke,
+              eo: next === OPS.eoFill || next === OPS.eoFillStroke || next === OPS.closeEOFillStroke,
+            };
+            break;
+          }
+          if (
+            next === OPS.save ||
+            next === OPS.restore ||
+            next === OPS.transform ||
+            next === OPS.constructPath ||
+            next === OPS.endPath
+          ) {
+            break;
+          }
+        }
+        if (paint && (paint.fill || paint.stroke) && args?.[0] && args?.[1]) {
+          emitPath(args[0], args[1], paint);
+        }
+        break;
+      }
+      default:
+        break;
+    }
+  }
+
+  if (!paths.length) {
+    throw new Error(
+      "No vector paths found in this PDF (it may be text/images only). Outline text in Illustrator first, or upload an SVG.",
+    );
+  }
+
+  return { paths, w: pageW, h: pageH };
 }
 
 /**
- * Warp a source SVG document into a clean continuous-path SVG (no strips).
+ * Collect path `d` strings from an SVG source (with transforms baked via getCTM).
  */
-async function buildWarpedPathSvg(sourceSvgTextIn, srcW, srcH, controls) {
-  await ensurePathDataPolyfill();
-
-  const outW = controls.outW;
-  const outH = controls.outH;
-  const detail = controls.pathDetail;
-
-  const parsed = new DOMParser().parseFromString(sourceSvgTextIn, "image/svg+xml");
+function extractSvgVectorPaths(svgText, srcW, srcH) {
+  const parsed = new DOMParser().parseFromString(svgText, "image/svg+xml");
   const srcRoot = parsed.documentElement;
-  if (srcRoot.querySelector("parsererror")) {
-    throw new Error("Could not parse source SVG");
-  }
+  if (srcRoot.querySelector("parsererror")) throw new Error("Could not parse SVG");
 
-  // Mount offscreen so getCTM works
   const host = document.createElement("div");
-  host.style.cssText = "position:fixed;left:-10000px;top:0;width:0;height:0;overflow:hidden;";
+  host.style.cssText = "position:fixed;left:-10000px;top:0;overflow:hidden;";
   const live = document.importNode(srcRoot, true);
   live.setAttribute("width", String(srcW));
   live.setAttribute("height", String(srcH));
@@ -744,51 +810,15 @@ async function buildWarpedPathSvg(sourceSvgTextIn, srcW, srcH, controls) {
   host.appendChild(live);
   document.body.appendChild(host);
 
-  const outParts = [];
-  outParts.push(`<?xml version="1.0" encoding="UTF-8"?>`);
-  outParts.push(
-    `<svg xmlns="http://www.w3.org/2000/svg" width="${outW}" height="${outH}" viewBox="0 0 ${outW} ${outH}">`,
-  );
-  if (controls.bgMode === "solid") {
-    outParts.push(`<rect width="100%" height="100%" fill="${controls.bgColor}"/>`);
-  }
-
-  // Soft edge fade as a mask (continuous, not strip opacity)
-  if (controls.edgeFade > 0) {
-    const usableHalf = Math.max(0.01, 1 - controls.crop);
-    const start = Math.max(0, Math.min(0.99, controls.fadeStart));
-    const x0 = ((-start * usableHalf + 1) / 2) * outW;
-    const x1 = ((start * usableHalf + 1) / 2) * outW;
-    const left = ((-usableHalf + 1) / 2) * outW;
-    const right = ((usableHalf + 1) / 2) * outW;
-    const midAlpha = 1;
-    const edgeAlpha = 1 - controls.edgeFade;
-    outParts.push(`<defs><linearGradient id="edgeFadeGrad" x1="0" y1="0" x2="1" y2="0">`);
-    outParts.push(
-      `<stop offset="0" stop-color="#fff" stop-opacity="${edgeAlpha.toFixed(3)}"/>`,
-      `<stop offset="${((x0 - left) / (right - left || 1)).toFixed(4)}" stop-color="#fff" stop-opacity="${midAlpha}"/>`,
-      `<stop offset="${((x1 - left) / (right - left || 1)).toFixed(4)}" stop-color="#fff" stop-opacity="${midAlpha}"/>`,
-      `<stop offset="1" stop-color="#fff" stop-opacity="${edgeAlpha.toFixed(3)}"/>`,
-    );
-    outParts.push(`</linearGradient>`);
-    outParts.push(
-      `<mask id="edgeFadeMask"><rect x="${left.toFixed(2)}" y="0" width="${(right - left).toFixed(2)}" height="${outH}" fill="url(#edgeFadeGrad)"/></mask></defs>`,
-    );
-    outParts.push(`<g mask="url(#edgeFadeMask)">`);
-  } else {
-    outParts.push(`<g>`);
-  }
-
+  /** @type {{ d: string, fill: string, stroke: string, fillRule: string, fillOpacity: number, strokeOpacity: number, strokeWidth: number }[]} */
+  const paths = [];
   try {
     const shapes = live.querySelectorAll("path, polygon, polyline, line, rect, circle, ellipse");
     for (const el of shapes) {
-      const matrix = getLocalToRootMatrix(el, live);
       let d = "";
       const tag = el.tagName.toLowerCase();
-
-      if (tag === "path") {
-        d = el.getAttribute("d") || "";
-      } else if (tag === "polygon" || tag === "polyline") {
+      if (tag === "path") d = el.getAttribute("d") || "";
+      else if (tag === "polygon" || tag === "polyline") {
         const pts = (el.getAttribute("points") || "")
           .trim()
           .split(/[\s,]+/)
@@ -796,86 +826,237 @@ async function buildWarpedPathSvg(sourceSvgTextIn, srcW, srcH, controls) {
           .filter((n) => !Number.isNaN(n));
         if (pts.length >= 2) {
           const cmds = [];
-          for (let i = 0; i < pts.length; i += 2) {
-            cmds.push(`${i === 0 ? "M" : "L"}${pts[i]} ${pts[i + 1]}`);
-          }
+          for (let i = 0; i < pts.length; i += 2) cmds.push(`${i === 0 ? "M" : "L"}${pts[i]} ${pts[i + 1]}`);
           if (tag === "polygon") cmds.push("Z");
           d = cmds.join(" ");
         }
       } else if (tag === "line") {
-        d = `M${el.getAttribute("x1") || 0} ${el.getAttribute("y1") || 0} L${el.getAttribute("x2") || 0} ${el.getAttribute("y2") || 0}`;
+        d = `M${el.getAttribute("x1") || 0} ${el.getAttribute("y1") || 0}L${el.getAttribute("x2") || 0} ${el.getAttribute("y2") || 0}`;
       } else if (tag === "rect") {
         const x = Number(el.getAttribute("x") || 0);
         const y = Number(el.getAttribute("y") || 0);
         const w = Number(el.getAttribute("width") || 0);
         const h = Number(el.getAttribute("height") || 0);
-        const rx = Number(el.getAttribute("rx") || 0);
-        const ry = Number(el.getAttribute("ry") || rx);
-        if (rx > 0 || ry > 0) {
-          // Approximate rounded rect as path
-          const rxx = Math.min(rx, w / 2);
-          const ryy = Math.min(ry, h / 2);
-          d = `M${x + rxx} ${y} H${x + w - rxx} A${rxx} ${ryy} 0 0 1 ${x + w} ${y + ryy} V${y + h - ryy} A${rxx} ${ryy} 0 0 1 ${x + w - rxx} ${y + h} H${x + rxx} A${rxx} ${ryy} 0 0 1 ${x} ${y + h - ryy} V${y + ryy} A${rxx} ${ryy} 0 0 1 ${x + rxx} ${y} Z`;
-        } else {
-          d = `M${x} ${y} H${x + w} V${y + h} H${x} Z`;
-        }
+        d = `M${x} ${y}H${x + w}V${y + h}H${x}Z`;
       } else if (tag === "circle" || tag === "ellipse") {
         const cx = Number(el.getAttribute("cx") || 0);
         const cy = Number(el.getAttribute("cy") || 0);
         const rx = Number(el.getAttribute(tag === "circle" ? "r" : "rx") || 0);
         const ry = Number(el.getAttribute(tag === "circle" ? "r" : "ry") || rx);
-        d = `M${cx - rx} ${cy} A${rx} ${ry} 0 1 0 ${cx + rx} ${cy} A${rx} ${ry} 0 1 0 ${cx - rx} ${cy} Z`;
+        d = `M${cx - rx} ${cy}A${rx} ${ry} 0 1 0 ${cx + rx} ${cy}A${rx} ${ry} 0 1 0 ${cx - rx} ${cy}Z`;
+      }
+      if (!d) continue;
+
+      // Bake local transform into path by sampling in root space
+      let matrix = null;
+      try {
+        const ctm = el.getCTM();
+        const rootCtm = live.getCTM();
+        if (ctm && rootCtm) matrix = rootCtm.inverse().multiply(ctm);
+      } catch {
+        matrix = null;
       }
 
-      if (!d) continue;
-      const warped = warpPathD(d, matrix, controls, srcW, srcH, outW, outH, detail);
-      if (!warped) continue;
+      const tmp = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      tmp.setAttribute("d", d);
+      const len = tmp.getTotalLength?.() || 0;
+      let baked = d;
+      if (matrix && len > 0) {
+        const steps = Math.max(8, Math.ceil(len / 2));
+        const pts = [];
+        for (let i = 0; i <= steps; i++) {
+          const p = tmp.getPointAtLength((i / steps) * len);
+          const x = matrix.a * p.x + matrix.c * p.y + matrix.e;
+          const y = matrix.b * p.x + matrix.d * p.y + matrix.f;
+          pts.push(`${i === 0 ? "M" : "L"}${fmt(x)} ${fmt(y)}`);
+        }
+        baked = pts.join("");
+      }
 
-      const cs = window.getComputedStyle(el);
+      const cs = getComputedStyle(el);
       const fill = el.getAttribute("fill") || cs.fill || "#000";
       const stroke = el.getAttribute("stroke") || cs.stroke || "none";
-      const fillOpacity = el.getAttribute("fill-opacity") || cs.fillOpacity;
-      const strokeOpacity = el.getAttribute("stroke-opacity") || cs.strokeOpacity;
-      const strokeWidth = el.getAttribute("stroke-width") || cs.strokeWidth;
-      const fillRule = el.getAttribute("fill-rule") || el.getAttribute("fillRule") || cs.fillRule;
-
-      let attrs = `d="${warped}"`;
-      if (fill && fill !== "none") attrs += ` fill="${fill}"`;
-      else attrs += ` fill="none"`;
-      if (stroke && stroke !== "none" && stroke !== "rgba(0, 0, 0, 0)") {
-        attrs += ` stroke="${stroke}"`;
-        if (strokeWidth && strokeWidth !== "0px") attrs += ` stroke-width="${strokeWidth}"`;
-      }
-      if (fillOpacity && fillOpacity !== "1") attrs += ` fill-opacity="${fillOpacity}"`;
-      if (strokeOpacity && strokeOpacity !== "1") attrs += ` stroke-opacity="${strokeOpacity}"`;
-      if (fillRule && fillRule !== "nonzero") attrs += ` fill-rule="${fillRule}"`;
-
-      outParts.push(`<path ${attrs}/>`);
+      paths.push({
+        d: baked,
+        fill: fill === "none" ? "none" : fill,
+        stroke: stroke === "none" || stroke === "rgba(0, 0, 0, 0)" ? "none" : stroke,
+        fillRule: el.getAttribute("fill-rule") || "nonzero",
+        fillOpacity: Number(el.getAttribute("fill-opacity") || cs.fillOpacity || 1),
+        strokeOpacity: Number(el.getAttribute("stroke-opacity") || cs.strokeOpacity || 1),
+        strokeWidth: parseFloat(el.getAttribute("stroke-width") || cs.strokeWidth || "0") || 0,
+      });
     }
-
-    // Text as paths via glyph outlines aren't available; skip <text> (pdf.js SVG usually converts to paths)
   } finally {
     host.remove();
   }
 
-  outParts.push(`</g></svg>`);
-  return outParts.join("");
+  if (!paths.length) throw new Error("No vector shapes found in SVG");
+  return { paths, w: srcW, h: srcH };
 }
 
-async function getSourceSvgForWarp() {
-  if (sourceKind === "svg" && sourceSvgText && sourceVectorSize) {
-    return { svgText: sourceSvgText, w: sourceVectorSize.w, h: sourceVectorSize.h };
+/**
+ * Warp path `d` (source SVG space) into output space by dense sampling.
+ * Keeps each shape as one continuous path (no strips).
+ */
+function warpPathD(d, controls, srcW, srcH, outW, outH, detail) {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("d", d);
+  svg.appendChild(path);
+
+  // Prefer segment-aware sampling when getPathData exists; else length sampling
+  if (typeof path.getPathData === "function") {
+    try {
+      const segs = path.getPathData({ normalize: true });
+      const out = [];
+      let cx = 0;
+      let cy = 0;
+      let sx = 0;
+      let sy = 0;
+      const map = (x, y) => sourceUVToOutputXY(x / srcW, y / srcH, controls, outW, outH);
+
+      const sampleCubic = (x0, y0, x1, y1, x2, y2, x3, y3) => {
+        for (let i = 1; i <= detail; i++) {
+          const t = i / detail;
+          const mt = 1 - t;
+          const x = mt * mt * mt * x0 + 3 * mt * mt * t * x1 + 3 * mt * t * t * x2 + t * t * t * x3;
+          const y = mt * mt * mt * y0 + 3 * mt * mt * t * y1 + 3 * mt * t * t * y2 + t * t * t * y3;
+          const p = map(x, y);
+          out.push(`L${fmt(p.x)} ${fmt(p.y)}`);
+        }
+      };
+
+      for (const seg of segs) {
+        const v = seg.values;
+        if (seg.type === "M") {
+          const p = map(v[0], v[1]);
+          out.push(`M${fmt(p.x)} ${fmt(p.y)}`);
+          cx = sx = v[0];
+          cy = sy = v[1];
+        } else if (seg.type === "L") {
+          const p = map(v[0], v[1]);
+          out.push(`L${fmt(p.x)} ${fmt(p.y)}`);
+          cx = v[0];
+          cy = v[1];
+        } else if (seg.type === "C") {
+          sampleCubic(cx, cy, v[0], v[1], v[2], v[3], v[4], v[5]);
+          cx = v[4];
+          cy = v[5];
+        } else if (seg.type === "Q") {
+          for (let i = 1; i <= detail; i++) {
+            const t = i / detail;
+            const mt = 1 - t;
+            const x = mt * mt * cx + 2 * mt * t * v[0] + t * t * v[2];
+            const y = mt * mt * cy + 2 * mt * t * v[1] + t * t * v[3];
+            const p = map(x, y);
+            out.push(`L${fmt(p.x)} ${fmt(p.y)}`);
+          }
+          cx = v[2];
+          cy = v[3];
+        } else if (seg.type === "Z" || seg.type === "z") {
+          out.push("Z");
+          cx = sx;
+          cy = sy;
+        }
+      }
+      if (out.length) return out.join("");
+    } catch {
+      // fall through
+    }
   }
+
+  const len = path.getTotalLength();
+  if (!len) return "";
+  const steps = Math.max(16, Math.ceil(len / Math.max(0.5, 8 / detail)));
+  const parts = [];
+  for (let i = 0; i <= steps; i++) {
+    const pt = path.getPointAtLength((i / steps) * len);
+    const p = sourceUVToOutputXY(pt.x / srcW, pt.y / srcH, controls, outW, outH);
+    parts.push(`${i === 0 ? "M" : "L"}${fmt(p.x)} ${fmt(p.y)}`);
+  }
+  // Close if original path closed
+  if (/[Zz]\s*$/.test(d.trim())) parts.push("Z");
+  return parts.join("");
+}
+
+function buildWarpedSvgFromPaths(pathSet, controls) {
+  const { paths, w: srcW, h: srcH } = pathSet;
+  const outW = controls.outW;
+  const outH = controls.outH;
+  const detail = controls.pathDetail;
+
+  const out = [];
+  out.push(`<?xml version="1.0" encoding="UTF-8"?>`);
+  out.push(
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${outW}" height="${outH}" viewBox="0 0 ${outW} ${outH}">`,
+  );
+  if (controls.bgMode === "solid") {
+    out.push(`<rect width="100%" height="100%" fill="${controls.bgColor}"/>`);
+  }
+
+  if (controls.edgeFade > 0) {
+    const usableHalf = Math.max(0.01, 1 - controls.crop);
+    const start = Math.max(0, Math.min(0.99, controls.fadeStart));
+    const left = ((-usableHalf + 1) / 2) * outW;
+    const right = ((usableHalf + 1) / 2) * outW;
+    const x0 = ((-start * usableHalf + 1) / 2) * outW;
+    const x1 = ((start * usableHalf + 1) / 2) * outW;
+    const edgeAlpha = 1 - controls.edgeFade;
+    const span = right - left || 1;
+    out.push(`<defs><linearGradient id="edgeFadeGrad" gradientUnits="userSpaceOnUse" x1="${left}" y1="0" x2="${right}" y2="0">`);
+    out.push(`<stop offset="0" stop-color="#fff" stop-opacity="${edgeAlpha.toFixed(3)}"/>`);
+    out.push(`<stop offset="${((x0 - left) / span).toFixed(4)}" stop-color="#fff" stop-opacity="1"/>`);
+    out.push(`<stop offset="${((x1 - left) / span).toFixed(4)}" stop-color="#fff" stop-opacity="1"/>`);
+    out.push(`<stop offset="1" stop-color="#fff" stop-opacity="${edgeAlpha.toFixed(3)}"/>`);
+    out.push(`</linearGradient>`);
+    out.push(
+      `<mask id="edgeFadeMask"><rect x="${left.toFixed(2)}" y="0" width="${span.toFixed(2)}" height="${outH}" fill="url(#edgeFadeGrad)"/></mask></defs>`,
+    );
+    out.push(`<g mask="url(#edgeFadeMask)">`);
+  } else {
+    out.push(`<g>`);
+  }
+
+  let count = 0;
+  for (const src of paths) {
+    const warped = warpPathD(src.d, controls, srcW, srcH, outW, outH, detail);
+    if (!warped) continue;
+    count++;
+    let attrs = `d="${warped}"`;
+    attrs += ` fill="${src.fill || "none"}"`;
+    if (src.fill && src.fill !== "none" && src.fillOpacity != null && src.fillOpacity < 1) {
+      attrs += ` fill-opacity="${src.fillOpacity}"`;
+    }
+    if (src.fillRule && src.fillRule !== "nonzero") attrs += ` fill-rule="${src.fillRule}"`;
+    if (src.stroke && src.stroke !== "none") {
+      attrs += ` stroke="${src.stroke}"`;
+      if (src.strokeWidth) attrs += ` stroke-width="${src.strokeWidth}"`;
+      if (src.strokeOpacity != null && src.strokeOpacity < 1) attrs += ` stroke-opacity="${src.strokeOpacity}"`;
+    }
+    out.push(`<path ${attrs}/>`);
+  }
+  out.push(`</g></svg>`);
+
+  if (!count) throw new Error("Warp produced no paths");
+  return out.join("");
+}
+
+async function getVectorPathSet() {
   if (sourceKind === "pdf" && sourcePdfBytes) {
     const pageNum = Number(els.pdfPage.value) || 1;
-    return pdfPageToSvgText(sourcePdfBytes, pageNum);
+    return extractPdfVectorPaths(sourcePdfBytes, pageNum);
   }
-  throw new Error("Reload the file to enable vector export");
+  if (sourceKind === "svg" && sourceSvgText && sourceVectorSize) {
+    return extractSvgVectorPaths(sourceSvgText, sourceVectorSize.w, sourceVectorSize.h);
+  }
+  throw new Error("Reload the PDF/SVG to enable vector export");
 }
 
 async function exportWarpedSvg(controls) {
-  const src = await getSourceSvgForWarp();
-  return buildWarpedPathSvg(src.svgText, src.w, src.h, controls);
+  const pathSet = await getVectorPathSet();
+  setStatus(`Warping ${pathSet.paths.length} vector paths…`);
+  await new Promise((r) => setTimeout(r, 10));
+  return buildWarpedSvgFromPaths(pathSet, controls);
 }
 
 async function svgTextToPdfBlob(svgText, controls) {
@@ -912,7 +1093,7 @@ async function exportSvg() {
       new Blob([svgText], { type: "image/svg+xml" }),
       `${exportBaseName()}-cylinder-${exportStamp()}.svg`,
     );
-    setStatus("Exported clean vector SVG");
+    setStatus(`Exported vector SVG (${(svgText.length / 1024).toFixed(0)} KB)`);
   } catch (err) {
     console.error(err);
     setStatus(err?.message || "SVG export failed");
@@ -924,15 +1105,16 @@ async function exportSvg() {
 async function exportPdf() {
   if (!sourceData) return;
   const controls = readControls();
-  setStatus("Exporting clean vector PDF…");
+  setStatus("Exporting vector PDF…");
   setExportBusy(true);
   await new Promise((r) => setTimeout(r, 20));
 
   try {
     const svgText = await exportWarpedSvg(controls);
+    setStatus("Writing PDF…");
     const blob = await svgTextToPdfBlob(svgText, controls);
     downloadBlob(blob, `${exportBaseName()}-cylinder-${exportStamp()}.pdf`);
-    setStatus("Exported clean vector PDF");
+    setStatus(`Exported vector PDF (${(blob.size / 1024).toFixed(0)} KB)`);
   } catch (err) {
     console.error(err);
     setStatus(err?.message || "PDF export failed");
