@@ -154,6 +154,18 @@ function screenXToSurfaceU(nx, wrap, edgeSquash) {
   return u; // -1 .. 1 across the front of the bottle
 }
 
+/**
+ * Vertical offset for horizontal lines so they follow a circular/elliptical
+ * arc (like a bottle ring seen with a slight camera pitch).
+ * Uses 1 − cos(θ) = 1 − √(1 − x²), not a parabola.
+ */
+function horizontalCurveOffset(nx, hCurve) {
+  if (!hCurve) return 0;
+  const x = Math.max(-1, Math.min(1, nx));
+  const cosTheta = Math.sqrt(Math.max(0, 1 - x * x));
+  return hCurve * 0.45 * (1 - cosTheta);
+}
+
 function sampleBilinear(data, w, h, x, y) {
   if (x < 0 || y < 0 || x >= w - 1 || y >= h - 1) {
     // soft edge clamp with transparency outside
@@ -251,12 +263,9 @@ function warpToImageData(src, controls, width, height) {
       // Map surface → source U. Label arc zooms which slice of the flat art is visible.
       let u = 0.5 + surface * (labelSpan * 0.5) / controls.scaleX + controls.offsetX + rotateU;
 
-      // Vertical: straight down the bottle. Optional slight bow for camera angle.
+      // Vertical: straight down the bottle, plus circular arc for horizontal lines
       let v = 0.5 + (ny - 0.5 - controls.offsetY) / controls.scaleY;
-      if (controls.hCurve !== 0) {
-        // Mild parabolic bow of horizontal lines (camera looking slightly up/down)
-        v += controls.hCurve * 0.15 * (nx * nx) * (ny - 0.5) * 2;
-      }
+      v += horizontalCurveOffset(nx, controls.hCurve);
 
       const sx = u * sw;
       const sy = v * sh;
@@ -374,14 +383,26 @@ function exportBaseName() {
 }
 
 /**
+ * Same source→output mapping as the pixel preview (for one X).
+ * Returns normalized source U/V for a normalized output position.
+ */
+function sampleSourceUV(nx, ny, controls) {
+  const labelSpan = Math.max(0.15, Math.min(1, controls.labelArcDeg / 180));
+  const rotateU = controls.rotateDeg / 180;
+  const surface = screenXToSurfaceU(nx, controls.wrap, controls.edgeSquash);
+  const u = 0.5 + (surface * (labelSpan * 0.5)) / controls.scaleX + controls.offsetX + rotateU;
+  const v =
+    0.5 + (ny - 0.5 - controls.offsetY) / controls.scaleY + horizontalCurveOffset(nx, controls.hCurve);
+  return { u, v };
+}
+
+/**
  * Build vertical strips that approximate the cylinder warp for vector export.
- * Each strip maps a source U-range onto a destination X-range with local scale.
+ * Uses the same UV mapping as the artboard preview.
  */
 function buildCylinderStrips(controls, stripCount) {
   const crop = controls.crop;
   const usableHalf = Math.max(0.01, 1 - crop);
-  const labelSpan = Math.max(0.15, Math.min(1, controls.labelArcDeg / 180));
-  const rotateU = controls.rotateDeg / 180;
   const strips = [];
 
   for (let i = 0; i < stripCount; i++) {
@@ -391,50 +412,69 @@ function buildCylinderStrips(controls, stripCount) {
     const nx1 = -1 + 2 * t1;
     const nxMid = (nx0 + nx1) / 2;
 
-    // Destination X in normalized canvas space (-1..1), then 0..1
-    // Only the usable cylinder face is filled; outside is empty when clipped.
-    const faceX0 = nx0 * usableHalf;
-    const faceX1 = nx1 * usableHalf;
-    const dstX0 = (faceX0 + 1) / 2;
-    const dstX1 = (faceX1 + 1) / 2;
+    // Destination X: cylinder face only (cropped sides stay empty)
+    const dstX0 = (nx0 * usableHalf + 1) / 2;
+    const dstX1 = (nx1 * usableHalf + 1) / 2;
 
-    const surface0 = screenXToSurfaceU(nx0, controls.wrap, controls.edgeSquash);
-    const surface1 = screenXToSurfaceU(nx1, controls.wrap, controls.edgeSquash);
-    const surfaceMid = screenXToSurfaceU(nxMid, controls.wrap, controls.edgeSquash);
+    // Source U at strip edges (ny unused for U)
+    const { u: srcU0 } = sampleSourceUV(nx0, 0.5, controls);
+    const { u: srcU1 } = sampleSourceUV(nx1, 0.5, controls);
 
-    const srcU0 = 0.5 + surface0 * (labelSpan * 0.5) / controls.scaleX + controls.offsetX + rotateU;
-    const srcU1 = 0.5 + surface1 * (labelSpan * 0.5) / controls.scaleX + controls.offsetX + rotateU;
-    const srcUMid = 0.5 + surfaceMid * (labelSpan * 0.5) / controls.scaleX + controls.offsetX + rotateU;
+    // Source V at top/bottom of page for this strip (includes horiz. curve)
+    const { v: srcVTop } = sampleSourceUV(nxMid, 0, controls);
+    const { v: srcVBot } = sampleSourceUV(nxMid, 1, controls);
 
-    // Vertical mapping (uniform; bow applied as slight Y scale/offset per strip)
-    const vCenter = 0.5 - controls.offsetY / controls.scaleY;
-    const vHalf = 0.5 / controls.scaleY;
-    let srcV0 = vCenter - vHalf;
-    let srcV1 = vCenter + vHalf;
-    if (controls.hCurve !== 0) {
-      const bow = controls.hCurve * 0.15 * (nxMid * nxMid);
-      srcV0 += bow * -0.5;
-      srcV1 += bow * 0.5;
-    }
-
-    // Soft shade from cylinder normal
     const cosN = Math.sqrt(Math.max(0, 1 - nxMid * nxMid));
     const shade = controls.falloff > 0 ? 1 - controls.falloff * (1 - cosN) : 1;
 
     strips.push({
+      nxMid,
       dstX0,
       dstX1,
       srcU0,
       srcU1,
-      srcUMid,
-      srcV0,
-      srcV1,
+      srcVTop,
+      srcVBot,
       shade,
-      absNx: Math.abs(nxMid),
     });
   }
 
   return strips;
+}
+
+/**
+ * Place a source V window [srcVTop, srcVBot] (top→bottom, may be outside 0..1)
+ * onto the page. The unclamped window maps to the full page height; only the
+ * overlapping [0,1] source region is drawn, at the matching destination band.
+ * This is what makes horiz. curve match the artboard.
+ */
+function mapSourceVWindowToPage(srcVTop, srcVBot, srcH, pageH) {
+  const span = srcVBot - srcVTop;
+  if (Math.abs(span) < 1e-6) return null;
+
+  const embedV0 = Math.max(0, Math.min(1, srcVTop));
+  const embedV1 = Math.max(0, Math.min(1, srcVBot));
+  if (embedV1 - embedV0 < 1e-6) return null;
+
+  // ny in 0..1 (top→bottom) where this source V lands on the page
+  const ny0 = (embedV0 - srcVTop) / span;
+  const ny1 = (embedV1 - srcVTop) / span;
+
+  // PDF y-up
+  const pageYTop = (1 - ny0) * pageH;
+  const pageYBot = (1 - ny1) * pageH;
+  const dstH = pageYTop - pageYBot;
+  if (dstH < 0.2) return null;
+
+  return {
+    // source crop in PDF coords (y-up)
+    left: null, // filled by caller
+    bottom: (1 - embedV1) * srcH,
+    top: (1 - embedV0) * srcH,
+    // destination
+    y: pageYBot,
+    height: dstH,
+  };
 }
 
 function setExportBusy(busy) {
@@ -524,15 +564,20 @@ function buildWarpedSvg(controls) {
     const dw = Math.max(0.25, (s.dstX1 - s.dstX0) * outW);
     const su0 = Math.min(s.srcU0, s.srcU1);
     const su1 = Math.max(s.srcU0, s.srcU1);
+    if (su1 <= 0 || su0 >= 1) continue;
+
     const srcX = su0 * sw;
     const srcStripW = Math.max(1e-4, (su1 - su0) * sw);
-    const srcY = s.srcV0 * sh;
-    const srcStripH = Math.max(1e-4, (s.srcV1 - s.srcV0) * sh);
+
+    // Unclamped V window maps to full output height (same as preview)
+    const srcVTop = s.srcVTop;
+    const srcVBot = s.srcVBot;
+    const vSpan = srcVBot - srcVTop || 1;
+    const scaleY = outH / (vSpan * sh);
+    const ty = -srcVTop * sh * scaleY;
 
     const scaleX = dw / srcStripW;
-    const scaleY = outH / srcStripH;
     const tx = dx - srcX * scaleX;
-    const ty = 0 - srcY * scaleY;
     const opacity = Math.max(0.05, Math.min(1, s.shade));
 
     clipDefs.push(
@@ -585,29 +630,31 @@ async function exportPdfFromPdfSource(controls) {
   for (const s of strips) {
     const su0 = Math.min(s.srcU0, s.srcU1);
     const su1 = Math.max(s.srcU0, s.srcU1);
-    const sv0 = s.srcV0;
-    const sv1 = s.srcV1;
-
-    if (su1 <= 0 || su0 >= 1 || sv1 <= 0 || sv0 >= 1) continue;
+    if (su1 <= 0 || su0 >= 1) continue;
 
     const left = Math.max(0, su0) * srcW;
     const right = Math.min(1, su1) * srcW;
-    // Source v is top→bottom; PDF y is bottom→top
-    const bottom = (1 - Math.min(1, sv1)) * srcH;
-    const top = (1 - Math.max(0, sv0)) * srcH;
-    if (right - left < 0.01 || top - bottom < 0.01) continue;
+    if (right - left < 0.01) continue;
 
-    const embedded = await outDoc.embedPage(srcPage, { left, bottom, right, top });
+    const placed = mapSourceVWindowToPage(s.srcVTop, s.srcVBot, srcH, pageH);
+    if (!placed) continue;
+    if (placed.top - placed.bottom < 0.01) continue;
+
+    const embedded = await outDoc.embedPage(srcPage, {
+      left,
+      bottom: placed.bottom,
+      right,
+      top: placed.top,
+    });
 
     const dstX = s.dstX0 * pageW;
     const dstW = Math.max(0.2, (s.dstX1 - s.dstX0) * pageW);
 
-    // Stretch the source V window across the full page height (matches preview)
     page.drawPage(embedded, {
       x: dstX,
-      y: 0,
+      y: placed.y,
       width: dstW,
-      height: pageH,
+      height: placed.height,
       opacity: Math.max(0.05, Math.min(1, s.shade)),
     });
   }
