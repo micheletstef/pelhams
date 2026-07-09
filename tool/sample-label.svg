@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 1000" width="800" height="1000">
+  <rect width="800" height="1000" fill="none"/>
+  <text x="400" y="180" text-anchor="middle" font-family="Georgia, serif" font-size="92" font-weight="700" fill="#E8B923">PELHAM'S</text>
+  <text x="400" y="280" text-anchor="middle" font-family="Georgia, serif" font-size="92" font-weight="700" fill="#E8B923">HERITAGE</text>
+  <text x="400" y="380" text-anchor="middle" font-family="Georgia, serif" font-size="92" font-weight="700" fill="#E8B923">APPLE</text>
+  <text x="400" y="480" text-anchor="middle" font-family="Georgia, serif" font-size="92" font-weight="700" fill="#E8B923">CIDER</text>
+  <text x="620" y="420" text-anchor="middle" font-family="Georgia, serif" font-size="48" fill="#E8B923">23</text>
+  <rect x="220" y="540" width="360" height="220" rx="40" ry="40" fill="none" stroke="#E8B923" stroke-width="4"/>
+  <circle cx="400" cy="650" r="70" fill="none" stroke="#E8B923" stroke-width="3"/>
+  <path d="M340 670 Q400 560 460 670 Q400 700 340 670Z" fill="none" stroke="#E8B923" stroke-width="3"/>
+  <text x="400" y="840" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="14" fill="#E8B923">EST. 2023 ù HAND CRAFTED</text>
+  <text x="400" y="865" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="14" fill="#E8B923">FROM HERITAGE APPLES</text>
+  <!-- vertical guides to judge foreshortening -->
+  <g stroke="#E8B923" stroke-width="2" opacity="0.35">
+    <line x1="80" y1="40" x2="80" y2="960"/>
+    <line x1="200" y1="40" x2="200" y2="960"/>
+    <line x1="400" y1="40" x2="400" y2="960"/>
+    <line x1="600" y1="40" x2="600" y2="960"/>
+    <line x1="720" y1="40" x2="720" y2="960"/>
+  </g>
+</svg>

@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Cylinder Wrap — Pelham</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=Instrument+Serif:ital@0;1&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app">
+      <aside class="panel">
+        <header class="brand">
+          <p class="brand-mark">Pelham</p>
+          <h1>Cylinder Wrap</h1>
+          <p class="brand-sub">Map a flat PDF or SVG onto a cylinder. Export the warped art without the bottle.</p>
+        </header>
+
+        <section class="block">
+          <h2>Source</h2>
+          <label class="dropzone" id="dropzone" for="file-input">
+            <input id="file-input" type="file" accept=".pdf,.svg,application/pdf,image/svg+xml" hidden />
+            <span class="dropzone-title">Drop PDF or SVG</span>
+            <span class="dropzone-hint" id="file-label">or click to browse</span>
+          </label>
+          <div class="row">
+            <label class="field">
+              <span>PDF page</span>
+              <input id="pdf-page" type="number" min="1" value="1" step="1" />
+            </label>
+            <label class="field">
+              <span>Source DPI</span>
+              <input id="source-dpi" type="number" min="72" max="600" value="300" step="1" />
+            </label>
+          </div>
+        </section>
+
+        <section class="block">
+          <h2>Cylinder</h2>
+          <label class="field slider">
+            <span>Curvature <em id="curvature-val">1.00</em></span>
+            <input id="curvature" type="range" min="0" max="2" value="1" step="0.01" />
+          </label>
+          <label class="field slider">
+            <span>Visible arc <em id="arc-val">160°</em></span>
+            <input id="arc" type="range" min="40" max="180" value="160" step="1" />
+          </label>
+          <label class="field slider">
+            <span>Edge warp <em id="edge-warp-val">1.00</em></span>
+            <input id="edge-warp" type="range" min="0" max="2" value="1" step="0.01" />
+          </label>
+          <label class="field slider">
+            <span>Perspective <em id="perspective-val">0.35</em></span>
+            <input id="perspective" type="range" min="0" max="1.5" value="0.35" step="0.01" />
+          </label>
+          <label class="field slider">
+            <span>Vertical bow <em id="v-bow-val">0.00</em></span>
+            <input id="v-bow" type="range" min="-0.5" max="0.5" value="0" step="0.01" />
+          </label>
+        </section>
+
+        <section class="block">
+          <h2>Transform</h2>
+          <label class="field slider">
+            <span>Scale X <em id="scale-x-val">1.00</em></span>
+            <input id="scale-x" type="range" min="0.2" max="3" value="1" step="0.01" />
+          </label>
+          <label class="field slider">
+            <span>Scale Y <em id="scale-y-val">1.00</em></span>
+            <input id="scale-y" type="range" min="0.2" max="3" value="1" step="0.01" />
+          </label>
+          <label class="field slider">
+            <span>Rotate <em id="rotate-val">0°</em></span>
+            <input id="rotate" type="range" min="-180" max="180" value="0" step="0.1" />
+          </label>
+          <label class="field slider">
+            <span>Offset X <em id="offset-x-val">0%</em></span>
+            <input id="offset-x" type="range" min="-100" max="100" value="0" step="0.1" />
+          </label>
+          <label class="field slider">
+            <span>Offset Y <em id="offset-y-val">0%</em></span>
+            <input id="offset-y" type="range" min="-100" max="100" value="0" step="0.1" />
+          </label>
+        </section>
+
+        <section class="block">
+          <h2>Shading & crop</h2>
+          <label class="field slider">
+            <span>Side falloff <em id="falloff-val">0.00</em></span>
+            <input id="falloff" type="range" min="0" max="1" value="0" step="0.01" />
+          </label>
+          <label class="field slider">
+            <span>Crop sides <em id="crop-val">0%</em></span>
+            <input id="crop" type="range" min="0" max="40" value="0" step="0.5" />
+          </label>
+          <label class="check">
+            <input id="clip-cylinder" type="checkbox" checked />
+            <span>Clip to cylinder silhouette</span>
+          </label>
+          <label class="check">
+            <input id="show-guides" type="checkbox" />
+            <span>Show guides</span>
+          </label>
+        </section>
+
+        <section class="block">
+          <h2>Output</h2>
+          <div class="row">
+            <label class="field">
+              <span>Width (px)</span>
+              <input id="out-w" type="number" min="200" max="8000" value="1600" step="1" />
+            </label>
+            <label class="field">
+              <span>Height (px)</span>
+              <input id="out-h" type="number" min="200" max="8000" value="2000" step="1" />
+            </label>
+          </div>
+          <label class="field">
+            <span>Background</span>
+            <div class="bg-row">
+              <select id="bg-mode">
+                <option value="transparent" selected>Transparent</option>
+                <option value="solid">Solid color</option>
+              </select>
+              <input id="bg-color" type="color" value="#2a1408" disabled />
+            </div>
+          </label>
+          <div class="actions">
+            <button type="button" id="btn-reset" class="btn ghost">Reset</button>
+            <button type="button" id="btn-export" class="btn primary" disabled>Export PNG</button>
+          </div>
+        </section>
+      </aside>
+
+      <main class="stage">
+        <div class="stage-bar">
+          <span id="status">Upload a PDF or SVG to begin</span>
+          <div class="stage-actions">
+            <button type="button" id="btn-fit" class="btn ghost small" disabled>Fit</button>
+            <button type="button" id="btn-redraw" class="btn ghost small" disabled>Redraw</button>
+          </div>
+        </div>
+        <div class="viewport" id="viewport">
+          <canvas id="preview" width="1600" height="2000"></canvas>
+        </div>
+      </main>
+    </div>
+
+    <script type="module" src="app.js"></script>
+  </body>
+</html>
