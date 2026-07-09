@@ -1,4 +1,5 @@
 import * as pdfjsLib from "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.8.69/pdf.min.mjs";
+import { PDFDocument, rgb } from "https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/+esm";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc =
   "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.8.69/pdf.worker.min.mjs";
@@ -27,8 +28,10 @@ const els = {
   outH: $("out-h"),
   bgMode: $("bg-mode"),
   bgColor: $("bg-color"),
+  pdfStrips: $("pdf-strips"),
   btnReset: $("btn-reset"),
   btnExport: $("btn-export"),
+  btnExportPdf: $("btn-export-pdf"),
   btnFit: $("btn-fit"),
   btnRedraw: $("btn-redraw"),
   status: $("status"),
@@ -66,6 +69,7 @@ const DEFAULTS = {
   bgColor: "#808080",
   pdfPage: 1,
   sourceDpi: 300,
+  pdfStrips: 180,
 };
 
 /** @type {HTMLCanvasElement | null} */
@@ -74,6 +78,13 @@ let sourceCanvas = null;
 let sourceData = null;
 /** @type {pdfjsLib.PDFDocumentProxy | null} */
 let pdfDoc = null;
+/** @type {ArrayBuffer | null} */
+let sourcePdfBytes = null;
+/** @type {string | null} */
+let sourceSvgText = null;
+/** @type {{ w: number, h: number } | null} */
+let sourceVectorSize = null;
+let sourceKind = ""; // "pdf" | "svg"
 let sourceName = "";
 let renderToken = 0;
 let rafPending = 0;
@@ -103,6 +114,7 @@ function readControls() {
     outH: Math.max(64, Math.round(Number(els.outH.value) || DEFAULTS.outH)),
     bgMode: els.bgMode.value,
     bgColor: els.bgColor.value,
+    pdfStrips: Math.max(20, Math.min(600, Math.round(Number(els.pdfStrips.value) || DEFAULTS.pdfStrips))),
   };
 }
 
@@ -338,47 +350,340 @@ function renderPreview() {
 
     const ms = Math.round(performance.now() - t0);
     setStatus(`${sourceName} · ${controls.outW}×${controls.outH} · preview ${w}×${h} · ${ms}ms`);
-    els.btnExport.disabled = false;
+    setExportBusy(false);
     els.btnFit.disabled = false;
     els.btnRedraw.disabled = false;
   }, 0);
 }
 
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function exportStamp() {
+  return new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+}
+
+function exportBaseName() {
+  return sourceName.replace(/\.[^.]+$/, "") || "wrap";
+}
+
+/**
+ * Build vertical strips that approximate the cylinder warp for vector export.
+ * Each strip maps a source U-range onto a destination X-range with local scale.
+ */
+function buildCylinderStrips(controls, stripCount) {
+  const crop = controls.crop;
+  const usableHalf = Math.max(0.01, 1 - crop);
+  const labelSpan = Math.max(0.15, Math.min(1, controls.labelArcDeg / 180));
+  const rotateU = controls.rotateDeg / 180;
+  const strips = [];
+
+  for (let i = 0; i < stripCount; i++) {
+    const t0 = i / stripCount;
+    const t1 = (i + 1) / stripCount;
+    const nx0 = -1 + 2 * t0;
+    const nx1 = -1 + 2 * t1;
+    const nxMid = (nx0 + nx1) / 2;
+
+    // Destination X in normalized canvas space (-1..1), then 0..1
+    // Only the usable cylinder face is filled; outside is empty when clipped.
+    const faceX0 = nx0 * usableHalf;
+    const faceX1 = nx1 * usableHalf;
+    const dstX0 = (faceX0 + 1) / 2;
+    const dstX1 = (faceX1 + 1) / 2;
+
+    const surface0 = screenXToSurfaceU(nx0, controls.wrap, controls.edgeSquash);
+    const surface1 = screenXToSurfaceU(nx1, controls.wrap, controls.edgeSquash);
+    const surfaceMid = screenXToSurfaceU(nxMid, controls.wrap, controls.edgeSquash);
+
+    const srcU0 = 0.5 + surface0 * (labelSpan * 0.5) / controls.scaleX + controls.offsetX + rotateU;
+    const srcU1 = 0.5 + surface1 * (labelSpan * 0.5) / controls.scaleX + controls.offsetX + rotateU;
+    const srcUMid = 0.5 + surfaceMid * (labelSpan * 0.5) / controls.scaleX + controls.offsetX + rotateU;
+
+    // Vertical mapping (uniform; bow applied as slight Y scale/offset per strip)
+    const vCenter = 0.5 - controls.offsetY / controls.scaleY;
+    const vHalf = 0.5 / controls.scaleY;
+    let srcV0 = vCenter - vHalf;
+    let srcV1 = vCenter + vHalf;
+    if (controls.hCurve !== 0) {
+      const bow = controls.hCurve * 0.15 * (nxMid * nxMid);
+      srcV0 += bow * -0.5;
+      srcV1 += bow * 0.5;
+    }
+
+    // Soft shade from cylinder normal
+    const cosN = Math.sqrt(Math.max(0, 1 - nxMid * nxMid));
+    const shade = controls.falloff > 0 ? 1 - controls.falloff * (1 - cosN) : 1;
+
+    strips.push({
+      dstX0,
+      dstX1,
+      srcU0,
+      srcU1,
+      srcUMid,
+      srcV0,
+      srcV1,
+      shade,
+      absNx: Math.abs(nxMid),
+    });
+  }
+
+  return strips;
+}
+
+function setExportBusy(busy) {
+  els.btnExport.disabled = busy || !sourceData;
+  els.btnExportPdf.disabled = busy || !sourceData;
+}
+
 async function exportPng() {
   if (!sourceData) return;
   const controls = readControls();
-  setStatus("Exporting full resolution…");
-  els.btnExport.disabled = true;
+  setStatus("Exporting PNG…");
+  setExportBusy(true);
 
   await new Promise((r) => setTimeout(r, 20));
-  const image = warpToImageData(sourceData, controls, controls.outW, controls.outH);
-  const canvas = document.createElement("canvas");
-  canvas.width = controls.outW;
-  canvas.height = controls.outH;
-  const ctx = canvas.getContext("2d");
-  ctx.putImageData(image, 0, 0);
+  try {
+    const image = warpToImageData(sourceData, controls, controls.outW, controls.outH);
+    const canvas = document.createElement("canvas");
+    canvas.width = controls.outW;
+    canvas.height = controls.outH;
+    const ctx = canvas.getContext("2d");
+    ctx.putImageData(image, 0, 0);
 
-  const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-  const base = sourceName.replace(/\.[^.]+$/, "") || "wrap";
-  canvas.toBlob((blob) => {
-    if (!blob) {
-      setStatus("Export failed");
-      els.btnExport.disabled = false;
-      return;
-    }
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${base}-cylinder-${stamp}.png`;
-    a.click();
-    URL.revokeObjectURL(url);
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+    if (!blob) throw new Error("PNG export failed");
+    downloadBlob(blob, `${exportBaseName()}-cylinder-${exportStamp()}.png`);
     setStatus(`Exported ${controls.outW}×${controls.outH} PNG`);
-    els.btnExport.disabled = false;
-  }, "image/png");
+  } catch (err) {
+    console.error(err);
+    setStatus(err?.message || "PNG export failed");
+  } finally {
+    setExportBusy(false);
+  }
+}
+
+function parseSvgSize(svgText) {
+  const parsed = new DOMParser().parseFromString(svgText, "image/svg+xml");
+  const root = parsed.documentElement;
+  const vb = root.getAttribute("viewBox");
+  if (vb) {
+    const parts = vb.trim().split(/[\s,]+/).map(Number);
+    if (parts.length === 4 && parts[2] > 0 && parts[3] > 0) {
+      return { w: parts[2], h: parts[3], root, parsed };
+    }
+  }
+  const w = parseFloat(root.getAttribute("width")) || 1024;
+  const h = parseFloat(root.getAttribute("height")) || 1024;
+  return { w, h, root, parsed };
+}
+
+/**
+ * Build a warped SVG using clipped vertical strips (vector-preserving for SVG sources).
+ */
+function buildWarpedSvg(controls) {
+  if (!sourceSvgText || !sourceVectorSize) throw new Error("No SVG source");
+  const { w: sw, h: sh } = sourceVectorSize;
+  const outW = controls.outW;
+  const outH = controls.outH;
+  const strips = buildCylinderStrips(controls, controls.pdfStrips);
+  const uid = `w${Math.random().toString(36).slice(2, 8)}`;
+
+  // Inline source SVG as a symbol so each strip can reuse it
+  const { root } = parseSvgSize(sourceSvgText);
+  root.removeAttribute("width");
+  root.removeAttribute("height");
+  if (!root.getAttribute("viewBox")) {
+    root.setAttribute("viewBox", `0 0 ${sw} ${sh}`);
+  }
+  const inner = root.innerHTML;
+  const vb = root.getAttribute("viewBox") || `0 0 ${sw} ${sh}`;
+
+  let bg = "";
+  if (controls.bgMode === "solid") {
+    bg = `<rect width="100%" height="100%" fill="${controls.bgColor}"/>`;
+  }
+
+  const parts = [];
+  parts.push(`<?xml version="1.0" encoding="UTF-8"?>`);
+  parts.push(
+    `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${outW}" height="${outH}" viewBox="0 0 ${outW} ${outH}">`,
+  );
+  const clipDefs = [];
+  const groups = [];
+
+  for (let i = 0; i < strips.length; i++) {
+    const s = strips[i];
+    const dx = s.dstX0 * outW;
+    const dw = Math.max(0.25, (s.dstX1 - s.dstX0) * outW);
+    const su0 = Math.min(s.srcU0, s.srcU1);
+    const su1 = Math.max(s.srcU0, s.srcU1);
+    const srcX = su0 * sw;
+    const srcStripW = Math.max(1e-4, (su1 - su0) * sw);
+    const srcY = s.srcV0 * sh;
+    const srcStripH = Math.max(1e-4, (s.srcV1 - s.srcV0) * sh);
+
+    const scaleX = dw / srcStripW;
+    const scaleY = outH / srcStripH;
+    const tx = dx - srcX * scaleX;
+    const ty = 0 - srcY * scaleY;
+    const opacity = Math.max(0.05, Math.min(1, s.shade));
+
+    clipDefs.push(
+      `<clipPath id="${uid}-c${i}"><rect x="${dx.toFixed(3)}" y="0" width="${dw.toFixed(3)}" height="${outH}"/></clipPath>`,
+    );
+    groups.push(
+      `<g clip-path="url(#${uid}-c${i})"><use href="#${uid}-src" xlink:href="#${uid}-src" transform="matrix(${scaleX.toFixed(6)} 0 0 ${scaleY.toFixed(6)} ${tx.toFixed(3)} ${ty.toFixed(3)})" opacity="${opacity.toFixed(3)}"/></g>`,
+    );
+  }
+
+  parts.push(`<defs>`);
+  parts.push(`<svg id="${uid}-src" viewBox="${vb}" width="${sw}" height="${sh}">${inner}</svg>`);
+  parts.push(clipDefs.join(""));
+  parts.push(`</defs>`);
+  parts.push(bg);
+  parts.push(groups.join(""));
+  parts.push(`</svg>`);
+  return parts.join("");
+}
+
+async function exportPdfFromPdfSource(controls) {
+  if (!sourcePdfBytes) throw new Error("No PDF source loaded");
+
+  const srcDoc = await PDFDocument.load(sourcePdfBytes.slice(0));
+  const pageIndex = Math.max(0, (Number(els.pdfPage.value) || 1) - 1);
+  const srcPage = srcDoc.getPages()[Math.min(pageIndex, srcDoc.getPageCount() - 1)];
+  const srcW = srcPage.getWidth();
+  const srcH = srcPage.getHeight();
+
+  // Output size in PDF points (match preview aspect; 96px ≈ 72pt)
+  const pageW = controls.outW * 0.75;
+  const pageH = controls.outH * 0.75;
+
+  const outDoc = await PDFDocument.create();
+  const page = outDoc.addPage([pageW, pageH]);
+
+  if (controls.bgMode === "solid") {
+    const [r, g, b] = hexToRgb(controls.bgColor);
+    page.drawRectangle({
+      x: 0,
+      y: 0,
+      width: pageW,
+      height: pageH,
+      color: rgb(r / 255, g / 255, b / 255),
+    });
+  }
+
+  const strips = buildCylinderStrips(controls, controls.pdfStrips);
+
+  for (const s of strips) {
+    const su0 = Math.min(s.srcU0, s.srcU1);
+    const su1 = Math.max(s.srcU0, s.srcU1);
+    const sv0 = s.srcV0;
+    const sv1 = s.srcV1;
+
+    if (su1 <= 0 || su0 >= 1 || sv1 <= 0 || sv0 >= 1) continue;
+
+    const left = Math.max(0, su0) * srcW;
+    const right = Math.min(1, su1) * srcW;
+    // Source v is top→bottom; PDF y is bottom→top
+    const bottom = (1 - Math.min(1, sv1)) * srcH;
+    const top = (1 - Math.max(0, sv0)) * srcH;
+    if (right - left < 0.01 || top - bottom < 0.01) continue;
+
+    const embedded = await outDoc.embedPage(srcPage, { left, bottom, right, top });
+
+    const dstX = s.dstX0 * pageW;
+    const dstW = Math.max(0.2, (s.dstX1 - s.dstX0) * pageW);
+
+    // Stretch the source V window across the full page height (matches preview)
+    page.drawPage(embedded, {
+      x: dstX,
+      y: 0,
+      width: dstW,
+      height: pageH,
+      opacity: Math.max(0.05, Math.min(1, s.shade)),
+    });
+  }
+
+  const bytes = await outDoc.save();
+  downloadBlob(
+    new Blob([bytes], { type: "application/pdf" }),
+    `${exportBaseName()}-cylinder-${exportStamp()}.pdf`,
+  );
+}
+
+async function exportPdfFromSvgSource(controls) {
+  const svgText = buildWarpedSvg(controls);
+  const stamp = exportStamp();
+  const base = exportBaseName();
+
+  // Always offer the warped SVG (true vectors)
+  downloadBlob(new Blob([svgText], { type: "image/svg+xml" }), `${base}-cylinder-${stamp}.svg`);
+
+  // Convert warped SVG → vector PDF via svg2pdf.js + jsPDF
+  const { jsPDF } = await import("https://cdn.jsdelivr.net/npm/jspdf@2.5.2/+esm");
+  await import("https://cdn.jsdelivr.net/npm/svg2pdf.js@2.2.3/+esm");
+
+  const pageW = controls.outW * 0.75;
+  const pageH = controls.outH * 0.75;
+  const doc = new jsPDF({ unit: "pt", format: [pageW, pageH], compress: true });
+
+  const container = document.createElement("div");
+  container.style.cssText = "position:fixed;left:-10000px;top:0;overflow:hidden;";
+  container.innerHTML = svgText;
+  const svgEl = container.querySelector("svg");
+  if (!svgEl) throw new Error("Failed to build warped SVG");
+  document.body.appendChild(container);
+  try {
+    await doc.svg(svgEl, { x: 0, y: 0, width: pageW, height: pageH });
+  } finally {
+    container.remove();
+  }
+
+  downloadBlob(doc.output("blob"), `${base}-cylinder-${stamp}.pdf`);
+}
+
+async function exportPdf() {
+  if (!sourceData) return;
+  const controls = readControls();
+  setStatus("Exporting vector PDF…");
+  setExportBusy(true);
+  await new Promise((r) => setTimeout(r, 20));
+
+  try {
+    if (sourceKind === "pdf") {
+      await exportPdfFromPdfSource(controls);
+      setStatus(`Exported vector PDF (${controls.pdfStrips} strips)`);
+    } else if (sourceKind === "svg") {
+      await exportPdfFromSvgSource(controls);
+      setStatus(`Exported vector SVG + PDF (${controls.pdfStrips} strips)`);
+    } else {
+      throw new Error("Reload the file to enable vector PDF export");
+    }
+  } catch (err) {
+    console.error(err);
+    setStatus(err?.message || "PDF export failed");
+  } finally {
+    setExportBusy(false);
+  }
 }
 
 async function loadSvgFile(file) {
   const text = await file.text();
+  sourceSvgText = text;
+  sourcePdfBytes = null;
+  sourceKind = "svg";
+
+  const size = parseSvgSize(text);
+  sourceVectorSize = { w: size.w, h: size.h };
+
   const svg = new Blob([text], { type: "image/svg+xml" });
   const url = URL.createObjectURL(svg);
   try {
@@ -390,23 +695,11 @@ async function loadSvgFile(file) {
       img.src = url;
     });
 
-    // Prefer intrinsic size; fall back to viewBox-ish defaults
-    let w = img.naturalWidth || 0;
-    let h = img.naturalHeight || 0;
-    if (!w || !h) {
-      const parsed = new DOMParser().parseFromString(text, "image/svg+xml");
-      const root = parsed.documentElement;
-      const vb = root.getAttribute("viewBox");
-      if (vb) {
-        const parts = vb.trim().split(/[\s,]+/).map(Number);
-        if (parts.length === 4 && parts[2] > 0 && parts[3] > 0) {
-          w = parts[2];
-          h = parts[3];
-        }
-      }
-      w = w || 1024;
-      h = h || 1024;
-    }
+    let w = img.naturalWidth || size.w;
+    let h = img.naturalHeight || size.h;
+    w = w || 1024;
+    h = h || 1024;
+    sourceVectorSize = { w: size.w || w, h: size.h || h };
 
     // Upscale tiny SVGs so warp sampling stays sharp
     const minEdge = 1600;
@@ -424,7 +717,11 @@ async function loadSvgFile(file) {
 
 async function loadPdfFile(file, pageNum, dpi) {
   const buffer = await file.arrayBuffer();
-  pdfDoc = await pdfjsLib.getDocument({ data: buffer }).promise;
+  sourcePdfBytes = buffer.slice(0);
+  sourceSvgText = null;
+  sourceKind = "pdf";
+
+  pdfDoc = await pdfjsLib.getDocument({ data: buffer.slice(0) }).promise;
   const pageCount = pdfDoc.numPages;
   els.pdfPage.max = String(pageCount);
   const page = Math.min(Math.max(1, pageNum), pageCount);
@@ -432,6 +729,7 @@ async function loadPdfFile(file, pageNum, dpi) {
 
   const pdfPage = await pdfDoc.getPage(page);
   const unscaled = pdfPage.getViewport({ scale: 1 });
+  sourceVectorSize = { w: unscaled.width, h: unscaled.height };
   const scale = dpi / 72;
   const viewport = pdfPage.getViewport({ scale });
   const c = document.createElement("canvas");
@@ -450,7 +748,7 @@ async function ingestFile(file) {
   sourceName = name;
   els.fileLabel.textContent = name;
   setStatus(`Loading ${name}…`);
-  els.btnExport.disabled = true;
+  setExportBusy(true);
 
   try {
     let canvas;
@@ -469,7 +767,11 @@ async function ingestFile(file) {
     scheduleRender();
   } catch (err) {
     console.error(err);
+    sourceKind = "";
+    sourcePdfBytes = null;
+    sourceSvgText = null;
     setStatus(err?.message || "Failed to load file");
+    setExportBusy(true);
   }
 }
 
@@ -512,6 +814,7 @@ function resetControls() {
   els.outH.value = DEFAULTS.outH;
   els.bgMode.value = DEFAULTS.bgMode;
   els.bgColor.value = DEFAULTS.bgColor;
+  els.pdfStrips.value = DEFAULTS.pdfStrips;
   updateLabels();
   scheduleRender();
 }
@@ -572,6 +875,7 @@ function bindUi() {
 
   els.btnReset.addEventListener("click", resetControls);
   els.btnExport.addEventListener("click", exportPng);
+  els.btnExportPdf.addEventListener("click", exportPdf);
   els.btnFit.addEventListener("click", fitOutputToSource);
   els.btnRedraw.addEventListener("click", () => {
     renderToken++;

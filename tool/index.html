@@ -105,8 +105,13 @@
             <input id="bg-color" type="color" value="#808080" disabled />
           </p>
           <p>
+            <label>PDF strips <input id="pdf-strips" type="number" min="40" max="600" value="180" step="1" size="5" /></label>
+            <small>(more = smoother vector wrap)</small>
+          </p>
+          <p>
             <button type="button" id="btn-reset">Reset</button>
             <button type="button" id="btn-export" disabled>Export PNG</button>
+            <button type="button" id="btn-export-pdf" disabled>Export PDF</button>
             <button type="button" id="btn-fit" disabled>Fit</button>
             <button type="button" id="btn-redraw" disabled>Redraw</button>
           </p>
