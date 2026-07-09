@@ -13,7 +13,6 @@ const els = {
   curvature: $("curvature"),
   arc: $("arc"),
   edgeWarp: $("edge-warp"),
-  perspective: $("perspective"),
   vBow: $("v-bow"),
   scaleX: $("scale-x"),
   scaleY: $("scale-y"),
@@ -37,7 +36,6 @@ const els = {
   curvatureVal: $("curvature-val"),
   arcVal: $("arc-val"),
   edgeWarpVal: $("edge-warp-val"),
-  perspectiveVal: $("perspective-val"),
   vBowVal: $("v-bow-val"),
   scaleXVal: $("scale-x-val"),
   scaleYVal: $("scale-y-val"),
@@ -50,9 +48,8 @@ const els = {
 
 const DEFAULTS = {
   curvature: 1,
-  arc: 160,
+  arc: 140,
   edgeWarp: 1,
-  perspective: 0.35,
   vBow: 0,
   scaleX: 1,
   scaleY: 1,
@@ -89,11 +86,10 @@ function setStatus(msg) {
 
 function readControls() {
   return {
-    curvature: Number(els.curvature.value),
-    arcDeg: Number(els.arc.value),
-    edgeWarp: Number(els.edgeWarp.value),
-    perspective: Number(els.perspective.value),
-    vBow: Number(els.vBow.value),
+    wrap: Number(els.curvature.value),
+    labelArcDeg: Number(els.arc.value),
+    edgeSquash: Number(els.edgeWarp.value),
+    hCurve: Number(els.vBow.value),
     scaleX: Number(els.scaleX.value),
     scaleY: Number(els.scaleY.value),
     rotateDeg: Number(els.rotate.value),
@@ -112,11 +108,10 @@ function readControls() {
 
 function updateLabels() {
   const c = readControls();
-  els.curvatureVal.textContent = c.curvature.toFixed(2);
-  els.arcVal.textContent = `${Math.round(c.arcDeg)}°`;
-  els.edgeWarpVal.textContent = c.edgeWarp.toFixed(2);
-  els.perspectiveVal.textContent = c.perspective.toFixed(2);
-  els.vBowVal.textContent = c.vBow.toFixed(2);
+  els.curvatureVal.textContent = c.wrap.toFixed(2);
+  els.arcVal.textContent = `${Math.round(c.labelArcDeg)}°`;
+  els.edgeWarpVal.textContent = c.edgeSquash.toFixed(2);
+  els.vBowVal.textContent = c.hCurve.toFixed(2);
   els.scaleXVal.textContent = c.scaleX.toFixed(2);
   els.scaleYVal.textContent = c.scaleY.toFixed(2);
   els.rotateVal.textContent = `${c.rotateDeg.toFixed(1)}°`;
@@ -128,33 +123,23 @@ function updateLabels() {
 }
 
 /**
- * Map normalized screen x in [-1, 1] to cylinder angle θ in radians.
- *
- * Orthographic cylinder: screenX ∝ sin(θ), so θ = asin(nx · sin(arcHalf)).
- * edgeWarp 0 = flat/linear, 1 = true cylinder, >1 exaggerates edge squash.
- * curvature scales foreshortening intensity (1 = physical cylinder).
+ * Bottle projection: screen X is the orthographic view of a vertical cylinder.
+ * x = R · sin(θ)  ⇒  θ = asin(x/R)
+ * Verticals stay vertical. Horizontals only bend if hCurve ≠ 0.
  */
-function screenXToTheta(nx, arcHalf, edgeWarp, curvature) {
+function screenXToSurfaceU(nx, wrap, edgeSquash) {
   const x = Math.max(-1, Math.min(1, nx));
-  const linear = x * arcHalf;
+  // Normalized surface coordinate in [-1, 1]: flat vs cylindrical
+  const flat = x;
+  const cyl = Math.asin(x) / (Math.PI / 2); // foreshortens toward edges
+  let u = flat * (1 - wrap) + cyl * wrap;
 
-  const k = Math.max(0.05, curvature);
-  const rim = Math.sin(Math.min(Math.PI / 2 - 1e-4, arcHalf));
-  // Raise |x| before asin to tighten/loosen wrap; remap so |x|=1 → ±arcHalf
-  const shaped = Math.sign(x) * Math.pow(Math.abs(x), 1 / k);
-  const asinArg = Math.max(-1, Math.min(1, shaped * rim));
-  const raw = Math.asin(asinArg);
-  const denom = Math.asin(rim) || arcHalf;
-  const cyl = raw * (arcHalf / denom);
-
-  const w = Math.max(0, Math.min(2, edgeWarp));
-  let theta = w <= 1 ? linear * (1 - w) + cyl * w : cyl;
-
-  if (w > 1) {
-    const e = 1 + (w - 1) * 1.5;
-    theta = Math.sign(theta) * Math.pow(Math.abs(theta) / arcHalf, 1 / e) * arcHalf;
+  // edgeSquash 1 = physical; >1 stronger compression at rims; <1 softer
+  if (edgeSquash !== 1) {
+    const s = Math.max(0.2, edgeSquash);
+    u = Math.sign(u) * Math.pow(Math.abs(u), s);
   }
-  return theta;
+  return u; // -1 .. 1 across the front of the bottle
 }
 
 function sampleBilinear(data, w, h, x, y) {
@@ -198,29 +183,32 @@ function hexToRgb(hex) {
 }
 
 /**
- * Core cylinder projection.
- * For each output pixel, recover surface angle θ and sample the flat artwork.
+ * Core bottle wrap.
+ *
+ * Output X maps to cylinder angle via asin (edge foreshortening).
+ * Output Y maps straight down the bottle (no vertical stretch by default).
+ * Label arc controls how much of the flat artwork spans the visible front.
  */
 function warpToImageData(src, controls, width, height) {
   const { data: srcPixels, width: sw, height: sh } = src;
   const out = new ImageData(width, height);
   const dst = out.data;
 
-  const arcHalf = ((controls.arcDeg * Math.PI) / 180) / 2;
-  const rotate = (controls.rotateDeg * Math.PI) / 180;
   const crop = controls.crop;
-  const usableHalf = 1 - crop;
+  const usableHalf = Math.max(0.01, 1 - crop);
+  // Fraction of the flat label shown across the bottle front
+  const labelSpan = Math.max(0.15, Math.min(1, controls.labelArcDeg / 180));
+  const rotateU = controls.rotateDeg / 180; // spin as fraction of full label width
 
   const [br, bg, bb] = hexToRgb(controls.bgColor);
   const solidBg = controls.bgMode === "solid";
 
   for (let py = 0; py < height; py++) {
-    const ny = (py + 0.5) / height; // 0..1 top→bottom
-    const cy = (ny - 0.5) * 2; // -1..1
+    const ny = (py + 0.5) / height; // 0..1
 
     for (let px = 0; px < width; px++) {
       const i = (py * width + px) * 4;
-      const nxRaw = ((px + 0.5) / width) * 2 - 1; // -1..1
+      const nxRaw = ((px + 0.5) / width) * 2 - 1; // -1..1 across canvas
       const absX = Math.abs(nxRaw);
 
       if (controls.clipCylinder && absX > usableHalf) {
@@ -233,9 +221,8 @@ function warpToImageData(src, controls, width, height) {
         continue;
       }
 
-      // Remap x into cylinder face after side crop
-      const nx = usableHalf > 0 ? nxRaw / usableHalf : nxRaw;
-
+      // x on the cylinder face (-1..1)
+      const nx = nxRaw / usableHalf;
       if (Math.abs(nx) > 1) {
         if (solidBg) {
           dst[i] = br;
@@ -246,30 +233,32 @@ function warpToImageData(src, controls, width, height) {
         continue;
       }
 
-      const theta = screenXToTheta(nx, arcHalf, controls.edgeWarp, controls.curvature);
-      const depth = Math.cos(Math.min(Math.PI / 2, Math.abs(theta))); // 1 at center, 0 at rim
+      // Surface parameter after cylindrical foreshortening (-1..1)
+      const surface = screenXToSurfaceU(nx, controls.wrap, controls.edgeSquash);
 
-      // Horizontal source: arc position + rotation + offset, then scale around center
-      let u = (theta - rotate) / (2 * arcHalf); // roughly -0.5..0.5 across visible arc
-      u = u / controls.scaleX + 0.5 + controls.offsetX;
+      // Map surface → source U. Label arc zooms which slice of the flat art is visible.
+      let u = 0.5 + surface * (labelSpan * 0.5) / controls.scaleX + controls.offsetX + rotateU;
 
-      // Vertical: scale + offset; perspective foreshortens height near edges; bow bends horizontals
-      const persp = 1 + controls.perspective * (1 - depth);
-      let v = (ny - 0.5 - controls.offsetY) / (controls.scaleY * persp) + 0.5;
-      v += controls.vBow * (nx * nx) * (ny - 0.5) * 2;
+      // Vertical: straight down the bottle. Optional slight bow for camera angle.
+      let v = 0.5 + (ny - 0.5 - controls.offsetY) / controls.scaleY;
+      if (controls.hCurve !== 0) {
+        // Mild parabolic bow of horizontal lines (camera looking slightly up/down)
+        v += controls.hCurve * 0.15 * (nx * nx) * (ny - 0.5) * 2;
+      }
 
       const sx = u * sw;
       const sy = v * sh;
       const rgba = sampleBilinear(srcPixels, sw, sh, sx, sy);
 
+      // Lighting from cylinder normal: cos(θ) = sqrt(1 - sin²θ) = sqrt(1 - nx²)
       let a = rgba[3];
       if (controls.falloff > 0) {
-        const edge = Math.pow(1 - Math.min(1, absX / usableHalf), 1.2);
-        const shade = 1 - controls.falloff * (1 - edge) * (1 - depth * 0.35);
+        const cosN = Math.sqrt(Math.max(0, 1 - nx * nx));
+        const shade = 1 - controls.falloff * (1 - cosN);
         rgba[0] *= shade;
         rgba[1] *= shade;
         rgba[2] *= shade;
-        a *= 0.55 + 0.45 * shade;
+        a *= 0.65 + 0.35 * shade;
       }
 
       if (solidBg) {
@@ -509,7 +498,6 @@ function resetControls() {
   els.curvature.value = DEFAULTS.curvature;
   els.arc.value = DEFAULTS.arc;
   els.edgeWarp.value = DEFAULTS.edgeWarp;
-  els.perspective.value = DEFAULTS.perspective;
   els.vBow.value = DEFAULTS.vBow;
   els.scaleX.value = DEFAULTS.scaleX;
   els.scaleY.value = DEFAULTS.scaleY;
@@ -559,7 +547,6 @@ function bindUi() {
     els.curvature,
     els.arc,
     els.edgeWarp,
-    els.perspective,
     els.vBow,
     els.scaleX,
     els.scaleY,

@@ -50,6 +50,12 @@ label {
   display: inline;
 }
 
+small {
+  display: block;
+  color: #666;
+  font-size: 11px;
+}
+
 input[type="range"] {
   width: 140px;
   vertical-align: middle;
