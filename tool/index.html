@@ -44,6 +44,11 @@
             <span id="v-bow-val">0.00</span>
             <small>(elliptical arc on horizontals)</small>
           </p>
+          <p>
+            <label>Perspective <input id="perspective" type="range" min="0" max="1.5" value="0" step="0.01" /></label>
+            <span id="perspective-val">0.00</span>
+            <small>(vertical squash toward edges)</small>
+          </p>
         </fieldset>
 
         <fieldset>
@@ -73,8 +78,14 @@
         <fieldset>
           <legend>Shading & crop</legend>
           <p>
-            <label>Side falloff <input id="falloff" type="range" min="0" max="1" value="0" step="0.01" /></label>
-            <span id="falloff-val">0.00</span>
+            <label>Edge fade <input id="edge-fade" type="range" min="0" max="1" value="0" step="0.01" /></label>
+            <span id="edge-fade-val">0.00</span>
+            <small>(fade out left/right edges)</small>
+          </p>
+          <p>
+            <label>Fade start <input id="fade-start" type="range" min="0" max="100" value="60" step="1" /></label>
+            <span id="fade-start-val">60%</span>
+            <small>(how far in from center the fade begins)</small>
           </p>
           <p>
             <label>Crop sides <input id="crop" type="range" min="0" max="40" value="0" step="0.5" /></label>
@@ -105,13 +116,14 @@
             <input id="bg-color" type="color" value="#808080" disabled />
           </p>
           <p>
-            <label>PDF strips <input id="pdf-strips" type="number" min="40" max="600" value="180" step="1" size="5" /></label>
-            <small>(more = smoother vector wrap)</small>
+            <label>Path detail <input id="path-detail" type="number" min="4" max="40" value="12" step="1" size="4" /></label>
+            <small>(points per curve segment for vector export)</small>
           </p>
           <p>
             <button type="button" id="btn-reset">Reset</button>
             <button type="button" id="btn-export" disabled>Export PNG</button>
             <button type="button" id="btn-export-pdf" disabled>Export PDF</button>
+            <button type="button" id="btn-export-svg" disabled>Export SVG</button>
             <button type="button" id="btn-fit" disabled>Fit</button>
             <button type="button" id="btn-redraw" disabled>Redraw</button>
           </p>

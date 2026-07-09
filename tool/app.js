@@ -1,5 +1,4 @@
 import * as pdfjsLib from "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.8.69/pdf.min.mjs";
-import { PDFDocument, rgb } from "https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/+esm";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc =
   "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.8.69/pdf.worker.min.mjs";
@@ -15,12 +14,14 @@ const els = {
   arc: $("arc"),
   edgeWarp: $("edge-warp"),
   vBow: $("v-bow"),
+  perspective: $("perspective"),
   scaleX: $("scale-x"),
   scaleY: $("scale-y"),
   rotate: $("rotate"),
   offsetX: $("offset-x"),
   offsetY: $("offset-y"),
-  falloff: $("falloff"),
+  edgeFade: $("edge-fade"),
+  fadeStart: $("fade-start"),
   crop: $("crop"),
   clipCylinder: $("clip-cylinder"),
   showGuides: $("show-guides"),
@@ -28,10 +29,11 @@ const els = {
   outH: $("out-h"),
   bgMode: $("bg-mode"),
   bgColor: $("bg-color"),
-  pdfStrips: $("pdf-strips"),
+  pathDetail: $("path-detail"),
   btnReset: $("btn-reset"),
   btnExport: $("btn-export"),
   btnExportPdf: $("btn-export-pdf"),
+  btnExportSvg: $("btn-export-svg"),
   btnFit: $("btn-fit"),
   btnRedraw: $("btn-redraw"),
   status: $("status"),
@@ -40,12 +42,14 @@ const els = {
   arcVal: $("arc-val"),
   edgeWarpVal: $("edge-warp-val"),
   vBowVal: $("v-bow-val"),
+  perspectiveVal: $("perspective-val"),
   scaleXVal: $("scale-x-val"),
   scaleYVal: $("scale-y-val"),
   rotateVal: $("rotate-val"),
   offsetXVal: $("offset-x-val"),
   offsetYVal: $("offset-y-val"),
-  falloffVal: $("falloff-val"),
+  edgeFadeVal: $("edge-fade-val"),
+  fadeStartVal: $("fade-start-val"),
   cropVal: $("crop-val"),
 };
 
@@ -54,12 +58,14 @@ const DEFAULTS = {
   arc: 140,
   edgeWarp: 1,
   vBow: 0,
+  perspective: 0,
   scaleX: 1,
   scaleY: 1,
   rotate: 0,
   offsetX: 0,
   offsetY: 0,
-  falloff: 0,
+  edgeFade: 0,
+  fadeStart: 60,
   crop: 0,
   clipCylinder: true,
   showGuides: false,
@@ -69,7 +75,7 @@ const DEFAULTS = {
   bgColor: "#808080",
   pdfPage: 1,
   sourceDpi: 300,
-  pdfStrips: 180,
+  pathDetail: 12,
 };
 
 /** @type {HTMLCanvasElement | null} */
@@ -101,12 +107,14 @@ function readControls() {
     labelArcDeg: Number(els.arc.value),
     edgeSquash: Number(els.edgeWarp.value),
     hCurve: Number(els.vBow.value),
+    perspective: Number(els.perspective.value),
     scaleX: Number(els.scaleX.value),
     scaleY: Number(els.scaleY.value),
     rotateDeg: Number(els.rotate.value),
     offsetX: Number(els.offsetX.value) / 100,
     offsetY: Number(els.offsetY.value) / 100,
-    falloff: Number(els.falloff.value),
+    edgeFade: Number(els.edgeFade.value),
+    fadeStart: Number(els.fadeStart.value) / 100,
     crop: Number(els.crop.value) / 100,
     clipCylinder: els.clipCylinder.checked,
     showGuides: els.showGuides.checked,
@@ -114,7 +122,7 @@ function readControls() {
     outH: Math.max(64, Math.round(Number(els.outH.value) || DEFAULTS.outH)),
     bgMode: els.bgMode.value,
     bgColor: els.bgColor.value,
-    pdfStrips: Math.max(20, Math.min(600, Math.round(Number(els.pdfStrips.value) || DEFAULTS.pdfStrips))),
+    pathDetail: Math.max(4, Math.min(40, Math.round(Number(els.pathDetail.value) || DEFAULTS.pathDetail))),
   };
 }
 
@@ -124,12 +132,14 @@ function updateLabels() {
   els.arcVal.textContent = `${Math.round(c.labelArcDeg)}°`;
   els.edgeWarpVal.textContent = c.edgeSquash.toFixed(2);
   els.vBowVal.textContent = c.hCurve.toFixed(2);
+  els.perspectiveVal.textContent = c.perspective.toFixed(2);
   els.scaleXVal.textContent = c.scaleX.toFixed(2);
   els.scaleYVal.textContent = c.scaleY.toFixed(2);
   els.rotateVal.textContent = `${c.rotateDeg.toFixed(1)}°`;
   els.offsetXVal.textContent = `${(c.offsetX * 100).toFixed(1)}%`;
   els.offsetYVal.textContent = `${(c.offsetY * 100).toFixed(1)}%`;
-  els.falloffVal.textContent = c.falloff.toFixed(2);
+  els.edgeFadeVal.textContent = c.edgeFade.toFixed(2);
+  els.fadeStartVal.textContent = `${Math.round(c.fadeStart * 100)}%`;
   els.cropVal.textContent = `${(c.crop * 100).toFixed(1)}%`;
   els.bgColor.disabled = c.bgMode !== "solid";
 }
@@ -164,6 +174,27 @@ function horizontalCurveOffset(nx, hCurve) {
   const x = Math.max(-1, Math.min(1, nx));
   const cosTheta = Math.sqrt(Math.max(0, 1 - x * x));
   return hCurve * 0.45 * (1 - cosTheta);
+}
+
+/** Depth factor on cylinder face: 1 at center, 0 at rim. */
+function cylinderDepth(nx) {
+  const x = Math.max(-1, Math.min(1, nx));
+  return Math.sqrt(Math.max(0, 1 - x * x));
+}
+
+/**
+ * Soft left/right edge fade.
+ * fadeStart: 0..1 — distance from center where fade begins (0 = from center, 1 = only at rim).
+ * edgeFade: 0..1 — how strongly alpha drops toward the rim.
+ */
+function edgeFadeAlpha(nx, edgeFade, fadeStart) {
+  if (edgeFade <= 0) return 1;
+  const absX = Math.min(1, Math.abs(nx));
+  const start = Math.max(0, Math.min(0.99, fadeStart));
+  if (absX <= start) return 1;
+  const t = (absX - start) / (1 - start); // 0 at fade start → 1 at rim
+  const smooth = t * t * (3 - 2 * t); // smoothstep
+  return 1 - edgeFade * smooth;
 }
 
 function sampleBilinear(data, w, h, x, y) {
@@ -220,9 +251,6 @@ function warpToImageData(src, controls, width, height) {
 
   const crop = controls.crop;
   const usableHalf = Math.max(0.01, 1 - crop);
-  // Fraction of the flat label shown across the bottle front
-  const labelSpan = Math.max(0.15, Math.min(1, controls.labelArcDeg / 180));
-  const rotateU = controls.rotateDeg / 180; // spin as fraction of full label width
 
   const [br, bg, bb] = hexToRgb(controls.bgColor);
   const solidBg = controls.bgMode === "solid";
@@ -257,30 +285,13 @@ function warpToImageData(src, controls, width, height) {
         continue;
       }
 
-      // Surface parameter after cylindrical foreshortening (-1..1)
-      const surface = screenXToSurfaceU(nx, controls.wrap, controls.edgeSquash);
-
-      // Map surface → source U. Label arc zooms which slice of the flat art is visible.
-      let u = 0.5 + surface * (labelSpan * 0.5) / controls.scaleX + controls.offsetX + rotateU;
-
-      // Vertical: straight down the bottle, plus circular arc for horizontal lines
-      let v = 0.5 + (ny - 0.5 - controls.offsetY) / controls.scaleY;
-      v += horizontalCurveOffset(nx, controls.hCurve);
+      const { u, v } = sampleSourceUV(nx, ny, controls);
 
       const sx = u * sw;
       const sy = v * sh;
       const rgba = sampleBilinear(srcPixels, sw, sh, sx, sy);
 
-      // Lighting from cylinder normal: cos(θ) = sqrt(1 - sin²θ) = sqrt(1 - nx²)
-      let a = rgba[3];
-      if (controls.falloff > 0) {
-        const cosN = Math.sqrt(Math.max(0, 1 - nx * nx));
-        const shade = 1 - controls.falloff * (1 - cosN);
-        rgba[0] *= shade;
-        rgba[1] *= shade;
-        rgba[2] *= shade;
-        a *= 0.65 + 0.35 * shade;
-      }
+      let a = rgba[3] * edgeFadeAlpha(nx, controls.edgeFade, controls.fadeStart);
 
       if (solidBg) {
         const alpha = a / 255;
@@ -303,8 +314,13 @@ function warpToImageData(src, controls, width, height) {
 function drawGuides(ctx, width, height, controls) {
   if (!controls.showGuides) return;
   const crop = controls.crop;
+  const usableHalf = Math.max(0.01, 1 - crop);
   const left = width * crop;
   const right = width * (1 - crop);
+  // Fade start as distance from center on the cylinder face
+  const fadeX = (controls.fadeStart * usableHalf + 1) / 2;
+  const fadeLeft = (1 - fadeX) * width;
+  const fadeRight = fadeX * width;
 
   ctx.save();
   ctx.strokeStyle = "rgba(0, 0, 0, 0.45)";
@@ -318,6 +334,15 @@ function drawGuides(ctx, width, height, controls) {
   ctx.moveTo(width / 2, 0);
   ctx.lineTo(width / 2, height);
   ctx.stroke();
+  if (controls.edgeFade > 0) {
+    ctx.strokeStyle = "rgba(0, 0, 0, 0.25)";
+    ctx.beginPath();
+    ctx.moveTo(fadeLeft, 0);
+    ctx.lineTo(fadeLeft, height);
+    ctx.moveTo(fadeRight, 0);
+    ctx.lineTo(fadeRight, height);
+    ctx.stroke();
+  }
   ctx.setLineDash([]);
   ctx.strokeRect(left, 0, right - left, height);
   ctx.restore();
@@ -391,95 +416,58 @@ function sampleSourceUV(nx, ny, controls) {
   const rotateU = controls.rotateDeg / 180;
   const surface = screenXToSurfaceU(nx, controls.wrap, controls.edgeSquash);
   const u = 0.5 + (surface * (labelSpan * 0.5)) / controls.scaleX + controls.offsetX + rotateU;
+
+  // Perspective: foreshorten vertical scale toward the rims (deeper = smaller)
+  const depth = cylinderDepth(nx);
+  const perspScale = 1 + controls.perspective * (1 - depth);
   const v =
-    0.5 + (ny - 0.5 - controls.offsetY) / controls.scaleY + horizontalCurveOffset(nx, controls.hCurve);
+    0.5 +
+    (ny - 0.5 - controls.offsetY) / (controls.scaleY * perspScale) +
+    horizontalCurveOffset(nx, controls.hCurve);
   return { u, v };
 }
 
-/**
- * Build vertical strips that approximate the cylinder warp for vector export.
- * Uses the same UV mapping as the artboard preview.
- */
-function buildCylinderStrips(controls, stripCount) {
-  const crop = controls.crop;
-  const usableHalf = Math.max(0.01, 1 - crop);
-  const strips = [];
-
-  for (let i = 0; i < stripCount; i++) {
-    const t0 = i / stripCount;
-    const t1 = (i + 1) / stripCount;
-    const nx0 = -1 + 2 * t0;
-    const nx1 = -1 + 2 * t1;
-    const nxMid = (nx0 + nx1) / 2;
-
-    // Destination X: cylinder face only (cropped sides stay empty)
-    const dstX0 = (nx0 * usableHalf + 1) / 2;
-    const dstX1 = (nx1 * usableHalf + 1) / 2;
-
-    // Source U at strip edges (ny unused for U)
-    const { u: srcU0 } = sampleSourceUV(nx0, 0.5, controls);
-    const { u: srcU1 } = sampleSourceUV(nx1, 0.5, controls);
-
-    // Source V at top/bottom of page for this strip (includes horiz. curve)
-    const { v: srcVTop } = sampleSourceUV(nxMid, 0, controls);
-    const { v: srcVBot } = sampleSourceUV(nxMid, 1, controls);
-
-    const cosN = Math.sqrt(Math.max(0, 1 - nxMid * nxMid));
-    const shade = controls.falloff > 0 ? 1 - controls.falloff * (1 - cosN) : 1;
-
-    strips.push({
-      nxMid,
-      dstX0,
-      dstX1,
-      srcU0,
-      srcU1,
-      srcVTop,
-      srcVBot,
-      shade,
-    });
+/** Invert screenXToSurfaceU with binary search → nx in [-1, 1]. */
+function surfaceUToScreenX(surface, wrap, edgeSquash) {
+  const target = Math.max(-1, Math.min(1, surface));
+  let lo = -1;
+  let hi = 1;
+  for (let i = 0; i < 32; i++) {
+    const mid = (lo + hi) / 2;
+    const val = screenXToSurfaceU(mid, wrap, edgeSquash);
+    if (val < target) lo = mid;
+    else hi = mid;
   }
-
-  return strips;
+  return (lo + hi) / 2;
 }
 
 /**
- * Place a source V window [srcVTop, srcVBot] (top→bottom, may be outside 0..1)
- * onto the page. The unclamped window maps to the full page height; only the
- * overlapping [0,1] source region is drawn, at the matching destination band.
- * This is what makes horiz. curve match the artboard.
+ * Inverse of the preview mapping: source UV (0..1) → output pixel XY.
+ * Keeps shapes continuous (no strip slicing).
  */
-function mapSourceVWindowToPage(srcVTop, srcVBot, srcH, pageH) {
-  const span = srcVBot - srcVTop;
-  if (Math.abs(span) < 1e-6) return null;
+function sourceUVToOutputXY(u, v, controls, outW, outH) {
+  const labelSpan = Math.max(0.15, Math.min(1, controls.labelArcDeg / 180));
+  const rotateU = controls.rotateDeg / 180;
+  const usableHalf = Math.max(0.01, 1 - controls.crop);
 
-  const embedV0 = Math.max(0, Math.min(1, srcVTop));
-  const embedV1 = Math.max(0, Math.min(1, srcVBot));
-  if (embedV1 - embedV0 < 1e-6) return null;
+  const halfSpan = (labelSpan * 0.5) / controls.scaleX || 1e-6;
+  const surface = (u - 0.5 - controls.offsetX - rotateU) / halfSpan;
+  const nx = surfaceUToScreenX(surface, controls.wrap, controls.edgeSquash);
 
-  // ny in 0..1 (top→bottom) where this source V lands on the page
-  const ny0 = (embedV0 - srcVTop) / span;
-  const ny1 = (embedV1 - srcVTop) / span;
+  const depth = cylinderDepth(nx);
+  const perspScale = 1 + controls.perspective * (1 - depth);
+  const hOff = horizontalCurveOffset(nx, controls.hCurve);
+  const ny = (v - 0.5 - hOff) * controls.scaleY * perspScale + 0.5 + controls.offsetY;
 
-  // PDF y-up
-  const pageYTop = (1 - ny0) * pageH;
-  const pageYBot = (1 - ny1) * pageH;
-  const dstH = pageYTop - pageYBot;
-  if (dstH < 0.2) return null;
-
-  return {
-    // source crop in PDF coords (y-up)
-    left: null, // filled by caller
-    bottom: (1 - embedV1) * srcH,
-    top: (1 - embedV0) * srcH,
-    // destination
-    y: pageYBot,
-    height: dstH,
-  };
+  const x = ((nx * usableHalf + 1) / 2) * outW;
+  const y = ny * outH;
+  return { x, y, nx, fade: edgeFadeAlpha(nx, controls.edgeFade, controls.fadeStart) };
 }
 
 function setExportBusy(busy) {
   els.btnExport.disabled = busy || !sourceData;
   els.btnExportPdf.disabled = busy || !sourceData;
+  els.btnExportSvg.disabled = busy || !sourceData;
 }
 
 async function exportPng() {
@@ -524,157 +512,373 @@ function parseSvgSize(svgText) {
   return { w, h, root, parsed };
 }
 
+/** Load legacy pdf.js once (needed for SVGGraphics, removed in pdf.js 4). */
+let legacyPdfjsPromise = null;
+function loadLegacyPdfjs() {
+  if (legacyPdfjsPromise) return legacyPdfjsPromise;
+  legacyPdfjsPromise = new Promise((resolve, reject) => {
+    if (window.pdfjsLib?.SVGGraphics) {
+      resolve(window.pdfjsLib);
+      return;
+    }
+    const s = document.createElement("script");
+    s.src = "https://cdn.jsdelivr.net/npm/pdfjs-dist@2.16.105/legacy/build/pdf.min.js";
+    s.onload = () => {
+      const lib = window.pdfjsLib;
+      if (!lib?.SVGGraphics) {
+        reject(new Error("Legacy pdf.js SVGGraphics unavailable"));
+        return;
+      }
+      lib.GlobalWorkerOptions.workerSrc =
+        "https://cdn.jsdelivr.net/npm/pdfjs-dist@2.16.105/legacy/build/pdf.worker.min.js";
+      resolve(lib);
+    };
+    s.onerror = () => reject(new Error("Failed to load legacy pdf.js"));
+    document.head.appendChild(s);
+  });
+  return legacyPdfjsPromise;
+}
+
+async function pdfPageToSvgText(pdfBytes, pageNum) {
+  const legacy = await loadLegacyPdfjs();
+  const doc = await legacy.getDocument({ data: pdfBytes.slice(0) }).promise;
+  const page = await doc.getPage(Math.max(1, pageNum));
+  const viewport = page.getViewport({ scale: 1 });
+  const opList = await page.getOperatorList();
+  const gfx = new legacy.SVGGraphics(page.commonObjs, page.objs);
+  gfx.embedFonts = true;
+  const svgEl = await gfx.getSVG(opList, viewport);
+  // Ensure viewBox matches page size
+  if (!svgEl.getAttribute("viewBox")) {
+    svgEl.setAttribute("viewBox", `0 0 ${viewport.width} ${viewport.height}`);
+  }
+  svgEl.setAttribute("width", String(viewport.width));
+  svgEl.setAttribute("height", String(viewport.height));
+  return {
+    svgText: new XMLSerializer().serializeToString(svgEl),
+    w: viewport.width,
+    h: viewport.height,
+  };
+}
+
+function getLocalToRootMatrix(el, root) {
+  try {
+    const ctm = el.getCTM();
+    const rootCtm = root.getCTM();
+    if (!ctm || !rootCtm) return null;
+    return rootCtm.inverse().multiply(ctm);
+  } catch {
+    return null;
+  }
+}
+
+function applyMatrix(m, x, y) {
+  if (!m) return { x, y };
+  return {
+    x: m.a * x + m.c * y + m.e,
+    y: m.b * x + m.d * y + m.f,
+  };
+}
+
+function cubicPoint(p0, p1, p2, p3, t) {
+  const mt = 1 - t;
+  return {
+    x: mt * mt * mt * p0.x + 3 * mt * mt * t * p1.x + 3 * mt * t * t * p2.x + t * t * t * p3.x,
+    y: mt * mt * mt * p0.y + 3 * mt * mt * t * p1.y + 3 * mt * t * t * p2.y + t * t * t * p3.y,
+  };
+}
+
+function quadPoint(p0, p1, p2, t) {
+  const mt = 1 - t;
+  return {
+    x: mt * mt * p0.x + 2 * mt * t * p1.x + t * t * p2.x,
+    y: mt * mt * p0.y + 2 * mt * t * p1.y + t * t * p2.y,
+  };
+}
+
+function fmt(n) {
+  return (Math.round(n * 1000) / 1000).toString();
+}
+
 /**
- * Build a warped SVG using clipped vertical strips (vector-preserving for SVG sources).
+ * Warp an SVG path `d` from source space into output space.
+ * Curves are subdivided so the wrap stays smooth without strip slicing.
  */
-function buildWarpedSvg(controls) {
-  if (!sourceSvgText || !sourceVectorSize) throw new Error("No SVG source");
-  const { w: sw, h: sh } = sourceVectorSize;
+function warpPathD(d, matrix, controls, srcW, srcH, outW, outH, detail) {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("d", d);
+  svg.appendChild(path);
+  let segs;
+  try {
+    segs = path.getPathData({ normalize: true });
+  } catch {
+    // Safari / older: use path-data-polyfill fallback via manual parse
+    segs = null;
+  }
+
+  if (!segs) {
+    // Minimal fallback: sample the path length
+    const len = path.getTotalLength();
+    if (!len) return "";
+    const steps = Math.max(8, Math.ceil(len / Math.max(2, 20 / detail)));
+    const parts = [];
+    for (let i = 0; i <= steps; i++) {
+      const p = path.getPointAtLength((i / steps) * len);
+      const local = applyMatrix(matrix, p.x, p.y);
+      const u = local.x / srcW;
+      const v = local.y / srcH;
+      const out = sourceUVToOutputXY(u, v, controls, outW, outH);
+      parts.push(`${i === 0 ? "M" : "L"}${fmt(out.x)} ${fmt(out.y)}`);
+    }
+    return parts.join(" ");
+  }
+
+  const out = [];
+  let cx = 0;
+  let cy = 0;
+  let sx = 0;
+  let sy = 0;
+
+  const mapPt = (x, y) => {
+    const local = applyMatrix(matrix, x, y);
+    return sourceUVToOutputXY(local.x / srcW, local.y / srcH, controls, outW, outH);
+  };
+
+  for (const seg of segs) {
+    const v = seg.values;
+    switch (seg.type) {
+      case "M": {
+        const p = mapPt(v[0], v[1]);
+        out.push(`M${fmt(p.x)} ${fmt(p.y)}`);
+        cx = sx = v[0];
+        cy = sy = v[1];
+        break;
+      }
+      case "L": {
+        const p = mapPt(v[0], v[1]);
+        out.push(`L${fmt(p.x)} ${fmt(p.y)}`);
+        cx = v[0];
+        cy = v[1];
+        break;
+      }
+      case "C": {
+        const p0 = { x: cx, y: cy };
+        const p1 = { x: v[0], y: v[1] };
+        const p2 = { x: v[2], y: v[3] };
+        const p3 = { x: v[4], y: v[5] };
+        for (let i = 1; i <= detail; i++) {
+          const t = i / detail;
+          const pt = cubicPoint(p0, p1, p2, p3, t);
+          const w = mapPt(pt.x, pt.y);
+          out.push(`L${fmt(w.x)} ${fmt(w.y)}`);
+        }
+        cx = p3.x;
+        cy = p3.y;
+        break;
+      }
+      case "Q": {
+        const p0 = { x: cx, y: cy };
+        const p1 = { x: v[0], y: v[1] };
+        const p2 = { x: v[2], y: v[3] };
+        for (let i = 1; i <= detail; i++) {
+          const t = i / detail;
+          const pt = quadPoint(p0, p1, p2, t);
+          const w = mapPt(pt.x, pt.y);
+          out.push(`L${fmt(w.x)} ${fmt(w.y)}`);
+        }
+        cx = p2.x;
+        cy = p2.y;
+        break;
+      }
+      case "Z":
+      case "z": {
+        out.push("Z");
+        cx = sx;
+        cy = sy;
+        break;
+      }
+      default: {
+        // Unsupported command after normalize — skip
+        break;
+      }
+    }
+  }
+  return out.join(" ");
+}
+
+function ensurePathDataPolyfill() {
+  if (SVGPathElement.prototype.getPathData) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const s = document.createElement("script");
+    s.src = "https://cdn.jsdelivr.net/npm/path-data-polyfill@1.0.4/path-data-polyfill.min.js";
+    s.onload = () => resolve();
+    s.onerror = () => reject(new Error("Failed to load path-data-polyfill"));
+    document.head.appendChild(s);
+  });
+}
+
+/**
+ * Warp a source SVG document into a clean continuous-path SVG (no strips).
+ */
+async function buildWarpedPathSvg(sourceSvgTextIn, srcW, srcH, controls) {
+  await ensurePathDataPolyfill();
+
   const outW = controls.outW;
   const outH = controls.outH;
-  const strips = buildCylinderStrips(controls, controls.pdfStrips);
-  const uid = `w${Math.random().toString(36).slice(2, 8)}`;
+  const detail = controls.pathDetail;
 
-  // Inline source SVG as a symbol so each strip can reuse it
-  const { root } = parseSvgSize(sourceSvgText);
-  root.removeAttribute("width");
-  root.removeAttribute("height");
-  if (!root.getAttribute("viewBox")) {
-    root.setAttribute("viewBox", `0 0 ${sw} ${sh}`);
-  }
-  const inner = root.innerHTML;
-  const vb = root.getAttribute("viewBox") || `0 0 ${sw} ${sh}`;
-
-  let bg = "";
-  if (controls.bgMode === "solid") {
-    bg = `<rect width="100%" height="100%" fill="${controls.bgColor}"/>`;
+  const parsed = new DOMParser().parseFromString(sourceSvgTextIn, "image/svg+xml");
+  const srcRoot = parsed.documentElement;
+  if (srcRoot.querySelector("parsererror")) {
+    throw new Error("Could not parse source SVG");
   }
 
-  const parts = [];
-  parts.push(`<?xml version="1.0" encoding="UTF-8"?>`);
-  parts.push(
-    `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${outW}" height="${outH}" viewBox="0 0 ${outW} ${outH}">`,
+  // Mount offscreen so getCTM works
+  const host = document.createElement("div");
+  host.style.cssText = "position:fixed;left:-10000px;top:0;width:0;height:0;overflow:hidden;";
+  const live = document.importNode(srcRoot, true);
+  live.setAttribute("width", String(srcW));
+  live.setAttribute("height", String(srcH));
+  if (!live.getAttribute("viewBox")) live.setAttribute("viewBox", `0 0 ${srcW} ${srcH}`);
+  host.appendChild(live);
+  document.body.appendChild(host);
+
+  const outParts = [];
+  outParts.push(`<?xml version="1.0" encoding="UTF-8"?>`);
+  outParts.push(
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${outW}" height="${outH}" viewBox="0 0 ${outW} ${outH}">`,
   );
-  const clipDefs = [];
-  const groups = [];
-
-  for (let i = 0; i < strips.length; i++) {
-    const s = strips[i];
-    const dx = s.dstX0 * outW;
-    const dw = Math.max(0.25, (s.dstX1 - s.dstX0) * outW);
-    const su0 = Math.min(s.srcU0, s.srcU1);
-    const su1 = Math.max(s.srcU0, s.srcU1);
-    if (su1 <= 0 || su0 >= 1) continue;
-
-    const srcX = su0 * sw;
-    const srcStripW = Math.max(1e-4, (su1 - su0) * sw);
-
-    // Unclamped V window maps to full output height (same as preview)
-    const srcVTop = s.srcVTop;
-    const srcVBot = s.srcVBot;
-    const vSpan = srcVBot - srcVTop || 1;
-    const scaleY = outH / (vSpan * sh);
-    const ty = -srcVTop * sh * scaleY;
-
-    const scaleX = dw / srcStripW;
-    const tx = dx - srcX * scaleX;
-    const opacity = Math.max(0.05, Math.min(1, s.shade));
-
-    clipDefs.push(
-      `<clipPath id="${uid}-c${i}"><rect x="${dx.toFixed(3)}" y="0" width="${dw.toFixed(3)}" height="${outH}"/></clipPath>`,
-    );
-    groups.push(
-      `<g clip-path="url(#${uid}-c${i})"><use href="#${uid}-src" xlink:href="#${uid}-src" transform="matrix(${scaleX.toFixed(6)} 0 0 ${scaleY.toFixed(6)} ${tx.toFixed(3)} ${ty.toFixed(3)})" opacity="${opacity.toFixed(3)}"/></g>`,
-    );
+  if (controls.bgMode === "solid") {
+    outParts.push(`<rect width="100%" height="100%" fill="${controls.bgColor}"/>`);
   }
 
-  parts.push(`<defs>`);
-  parts.push(`<svg id="${uid}-src" viewBox="${vb}" width="${sw}" height="${sh}">${inner}</svg>`);
-  parts.push(clipDefs.join(""));
-  parts.push(`</defs>`);
-  parts.push(bg);
-  parts.push(groups.join(""));
-  parts.push(`</svg>`);
-  return parts.join("");
+  // Soft edge fade as a mask (continuous, not strip opacity)
+  if (controls.edgeFade > 0) {
+    const usableHalf = Math.max(0.01, 1 - controls.crop);
+    const start = Math.max(0, Math.min(0.99, controls.fadeStart));
+    const x0 = ((-start * usableHalf + 1) / 2) * outW;
+    const x1 = ((start * usableHalf + 1) / 2) * outW;
+    const left = ((-usableHalf + 1) / 2) * outW;
+    const right = ((usableHalf + 1) / 2) * outW;
+    const midAlpha = 1;
+    const edgeAlpha = 1 - controls.edgeFade;
+    outParts.push(`<defs><linearGradient id="edgeFadeGrad" x1="0" y1="0" x2="1" y2="0">`);
+    outParts.push(
+      `<stop offset="0" stop-color="#fff" stop-opacity="${edgeAlpha.toFixed(3)}"/>`,
+      `<stop offset="${((x0 - left) / (right - left || 1)).toFixed(4)}" stop-color="#fff" stop-opacity="${midAlpha}"/>`,
+      `<stop offset="${((x1 - left) / (right - left || 1)).toFixed(4)}" stop-color="#fff" stop-opacity="${midAlpha}"/>`,
+      `<stop offset="1" stop-color="#fff" stop-opacity="${edgeAlpha.toFixed(3)}"/>`,
+    );
+    outParts.push(`</linearGradient>`);
+    outParts.push(
+      `<mask id="edgeFadeMask"><rect x="${left.toFixed(2)}" y="0" width="${(right - left).toFixed(2)}" height="${outH}" fill="url(#edgeFadeGrad)"/></mask></defs>`,
+    );
+    outParts.push(`<g mask="url(#edgeFadeMask)">`);
+  } else {
+    outParts.push(`<g>`);
+  }
+
+  try {
+    const shapes = live.querySelectorAll("path, polygon, polyline, line, rect, circle, ellipse");
+    for (const el of shapes) {
+      const matrix = getLocalToRootMatrix(el, live);
+      let d = "";
+      const tag = el.tagName.toLowerCase();
+
+      if (tag === "path") {
+        d = el.getAttribute("d") || "";
+      } else if (tag === "polygon" || tag === "polyline") {
+        const pts = (el.getAttribute("points") || "")
+          .trim()
+          .split(/[\s,]+/)
+          .map(Number)
+          .filter((n) => !Number.isNaN(n));
+        if (pts.length >= 2) {
+          const cmds = [];
+          for (let i = 0; i < pts.length; i += 2) {
+            cmds.push(`${i === 0 ? "M" : "L"}${pts[i]} ${pts[i + 1]}`);
+          }
+          if (tag === "polygon") cmds.push("Z");
+          d = cmds.join(" ");
+        }
+      } else if (tag === "line") {
+        d = `M${el.getAttribute("x1") || 0} ${el.getAttribute("y1") || 0} L${el.getAttribute("x2") || 0} ${el.getAttribute("y2") || 0}`;
+      } else if (tag === "rect") {
+        const x = Number(el.getAttribute("x") || 0);
+        const y = Number(el.getAttribute("y") || 0);
+        const w = Number(el.getAttribute("width") || 0);
+        const h = Number(el.getAttribute("height") || 0);
+        const rx = Number(el.getAttribute("rx") || 0);
+        const ry = Number(el.getAttribute("ry") || rx);
+        if (rx > 0 || ry > 0) {
+          // Approximate rounded rect as path
+          const rxx = Math.min(rx, w / 2);
+          const ryy = Math.min(ry, h / 2);
+          d = `M${x + rxx} ${y} H${x + w - rxx} A${rxx} ${ryy} 0 0 1 ${x + w} ${y + ryy} V${y + h - ryy} A${rxx} ${ryy} 0 0 1 ${x + w - rxx} ${y + h} H${x + rxx} A${rxx} ${ryy} 0 0 1 ${x} ${y + h - ryy} V${y + ryy} A${rxx} ${ryy} 0 0 1 ${x + rxx} ${y} Z`;
+        } else {
+          d = `M${x} ${y} H${x + w} V${y + h} H${x} Z`;
+        }
+      } else if (tag === "circle" || tag === "ellipse") {
+        const cx = Number(el.getAttribute("cx") || 0);
+        const cy = Number(el.getAttribute("cy") || 0);
+        const rx = Number(el.getAttribute(tag === "circle" ? "r" : "rx") || 0);
+        const ry = Number(el.getAttribute(tag === "circle" ? "r" : "ry") || rx);
+        d = `M${cx - rx} ${cy} A${rx} ${ry} 0 1 0 ${cx + rx} ${cy} A${rx} ${ry} 0 1 0 ${cx - rx} ${cy} Z`;
+      }
+
+      if (!d) continue;
+      const warped = warpPathD(d, matrix, controls, srcW, srcH, outW, outH, detail);
+      if (!warped) continue;
+
+      const cs = window.getComputedStyle(el);
+      const fill = el.getAttribute("fill") || cs.fill || "#000";
+      const stroke = el.getAttribute("stroke") || cs.stroke || "none";
+      const fillOpacity = el.getAttribute("fill-opacity") || cs.fillOpacity;
+      const strokeOpacity = el.getAttribute("stroke-opacity") || cs.strokeOpacity;
+      const strokeWidth = el.getAttribute("stroke-width") || cs.strokeWidth;
+      const fillRule = el.getAttribute("fill-rule") || el.getAttribute("fillRule") || cs.fillRule;
+
+      let attrs = `d="${warped}"`;
+      if (fill && fill !== "none") attrs += ` fill="${fill}"`;
+      else attrs += ` fill="none"`;
+      if (stroke && stroke !== "none" && stroke !== "rgba(0, 0, 0, 0)") {
+        attrs += ` stroke="${stroke}"`;
+        if (strokeWidth && strokeWidth !== "0px") attrs += ` stroke-width="${strokeWidth}"`;
+      }
+      if (fillOpacity && fillOpacity !== "1") attrs += ` fill-opacity="${fillOpacity}"`;
+      if (strokeOpacity && strokeOpacity !== "1") attrs += ` stroke-opacity="${strokeOpacity}"`;
+      if (fillRule && fillRule !== "nonzero") attrs += ` fill-rule="${fillRule}"`;
+
+      outParts.push(`<path ${attrs}/>`);
+    }
+
+    // Text as paths via glyph outlines aren't available; skip <text> (pdf.js SVG usually converts to paths)
+  } finally {
+    host.remove();
+  }
+
+  outParts.push(`</g></svg>`);
+  return outParts.join("");
 }
 
-async function exportPdfFromPdfSource(controls) {
-  if (!sourcePdfBytes) throw new Error("No PDF source loaded");
-
-  const srcDoc = await PDFDocument.load(sourcePdfBytes.slice(0));
-  const pageIndex = Math.max(0, (Number(els.pdfPage.value) || 1) - 1);
-  const srcPage = srcDoc.getPages()[Math.min(pageIndex, srcDoc.getPageCount() - 1)];
-  const srcW = srcPage.getWidth();
-  const srcH = srcPage.getHeight();
-
-  // Output size in PDF points (match preview aspect; 96px ≈ 72pt)
-  const pageW = controls.outW * 0.75;
-  const pageH = controls.outH * 0.75;
-
-  const outDoc = await PDFDocument.create();
-  const page = outDoc.addPage([pageW, pageH]);
-
-  if (controls.bgMode === "solid") {
-    const [r, g, b] = hexToRgb(controls.bgColor);
-    page.drawRectangle({
-      x: 0,
-      y: 0,
-      width: pageW,
-      height: pageH,
-      color: rgb(r / 255, g / 255, b / 255),
-    });
+async function getSourceSvgForWarp() {
+  if (sourceKind === "svg" && sourceSvgText && sourceVectorSize) {
+    return { svgText: sourceSvgText, w: sourceVectorSize.w, h: sourceVectorSize.h };
   }
-
-  const strips = buildCylinderStrips(controls, controls.pdfStrips);
-
-  for (const s of strips) {
-    const su0 = Math.min(s.srcU0, s.srcU1);
-    const su1 = Math.max(s.srcU0, s.srcU1);
-    if (su1 <= 0 || su0 >= 1) continue;
-
-    const left = Math.max(0, su0) * srcW;
-    const right = Math.min(1, su1) * srcW;
-    if (right - left < 0.01) continue;
-
-    const placed = mapSourceVWindowToPage(s.srcVTop, s.srcVBot, srcH, pageH);
-    if (!placed) continue;
-    if (placed.top - placed.bottom < 0.01) continue;
-
-    const embedded = await outDoc.embedPage(srcPage, {
-      left,
-      bottom: placed.bottom,
-      right,
-      top: placed.top,
-    });
-
-    const dstX = s.dstX0 * pageW;
-    const dstW = Math.max(0.2, (s.dstX1 - s.dstX0) * pageW);
-
-    page.drawPage(embedded, {
-      x: dstX,
-      y: placed.y,
-      width: dstW,
-      height: placed.height,
-      opacity: Math.max(0.05, Math.min(1, s.shade)),
-    });
+  if (sourceKind === "pdf" && sourcePdfBytes) {
+    const pageNum = Number(els.pdfPage.value) || 1;
+    return pdfPageToSvgText(sourcePdfBytes, pageNum);
   }
-
-  const bytes = await outDoc.save();
-  downloadBlob(
-    new Blob([bytes], { type: "application/pdf" }),
-    `${exportBaseName()}-cylinder-${exportStamp()}.pdf`,
-  );
+  throw new Error("Reload the file to enable vector export");
 }
 
-async function exportPdfFromSvgSource(controls) {
-  const svgText = buildWarpedSvg(controls);
-  const stamp = exportStamp();
-  const base = exportBaseName();
+async function exportWarpedSvg(controls) {
+  const src = await getSourceSvgForWarp();
+  return buildWarpedPathSvg(src.svgText, src.w, src.h, controls);
+}
 
-  // Always offer the warped SVG (true vectors)
-  downloadBlob(new Blob([svgText], { type: "image/svg+xml" }), `${base}-cylinder-${stamp}.svg`);
-
-  // Convert warped SVG → vector PDF via svg2pdf.js + jsPDF
+async function svgTextToPdfBlob(svgText, controls) {
   const { jsPDF } = await import("https://cdn.jsdelivr.net/npm/jspdf@2.5.2/+esm");
   await import("https://cdn.jsdelivr.net/npm/svg2pdf.js@2.2.3/+esm");
 
@@ -693,27 +897,42 @@ async function exportPdfFromSvgSource(controls) {
   } finally {
     container.remove();
   }
+  return doc.output("blob");
+}
 
-  downloadBlob(doc.output("blob"), `${base}-cylinder-${stamp}.pdf`);
+async function exportSvg() {
+  if (!sourceData) return;
+  const controls = readControls();
+  setStatus("Exporting vector SVG…");
+  setExportBusy(true);
+  await new Promise((r) => setTimeout(r, 20));
+  try {
+    const svgText = await exportWarpedSvg(controls);
+    downloadBlob(
+      new Blob([svgText], { type: "image/svg+xml" }),
+      `${exportBaseName()}-cylinder-${exportStamp()}.svg`,
+    );
+    setStatus("Exported clean vector SVG");
+  } catch (err) {
+    console.error(err);
+    setStatus(err?.message || "SVG export failed");
+  } finally {
+    setExportBusy(false);
+  }
 }
 
 async function exportPdf() {
   if (!sourceData) return;
   const controls = readControls();
-  setStatus("Exporting vector PDF…");
+  setStatus("Exporting clean vector PDF…");
   setExportBusy(true);
   await new Promise((r) => setTimeout(r, 20));
 
   try {
-    if (sourceKind === "pdf") {
-      await exportPdfFromPdfSource(controls);
-      setStatus(`Exported vector PDF (${controls.pdfStrips} strips)`);
-    } else if (sourceKind === "svg") {
-      await exportPdfFromSvgSource(controls);
-      setStatus(`Exported vector SVG + PDF (${controls.pdfStrips} strips)`);
-    } else {
-      throw new Error("Reload the file to enable vector PDF export");
-    }
+    const svgText = await exportWarpedSvg(controls);
+    const blob = await svgTextToPdfBlob(svgText, controls);
+    downloadBlob(blob, `${exportBaseName()}-cylinder-${exportStamp()}.pdf`);
+    setStatus("Exported clean vector PDF");
   } catch (err) {
     console.error(err);
     setStatus(err?.message || "PDF export failed");
@@ -848,12 +1067,14 @@ function resetControls() {
   els.arc.value = DEFAULTS.arc;
   els.edgeWarp.value = DEFAULTS.edgeWarp;
   els.vBow.value = DEFAULTS.vBow;
+  els.perspective.value = DEFAULTS.perspective;
   els.scaleX.value = DEFAULTS.scaleX;
   els.scaleY.value = DEFAULTS.scaleY;
   els.rotate.value = DEFAULTS.rotate;
   els.offsetX.value = DEFAULTS.offsetX;
   els.offsetY.value = DEFAULTS.offsetY;
-  els.falloff.value = DEFAULTS.falloff;
+  els.edgeFade.value = DEFAULTS.edgeFade;
+  els.fadeStart.value = DEFAULTS.fadeStart;
   els.crop.value = DEFAULTS.crop;
   els.clipCylinder.checked = DEFAULTS.clipCylinder;
   els.showGuides.checked = DEFAULTS.showGuides;
@@ -861,7 +1082,7 @@ function resetControls() {
   els.outH.value = DEFAULTS.outH;
   els.bgMode.value = DEFAULTS.bgMode;
   els.bgColor.value = DEFAULTS.bgColor;
-  els.pdfStrips.value = DEFAULTS.pdfStrips;
+  els.pathDetail.value = DEFAULTS.pathDetail;
   updateLabels();
   scheduleRender();
 }
@@ -898,12 +1119,14 @@ function bindUi() {
     els.arc,
     els.edgeWarp,
     els.vBow,
+    els.perspective,
     els.scaleX,
     els.scaleY,
     els.rotate,
     els.offsetX,
     els.offsetY,
-    els.falloff,
+    els.edgeFade,
+    els.fadeStart,
     els.crop,
     els.clipCylinder,
     els.showGuides,
@@ -923,6 +1146,7 @@ function bindUi() {
   els.btnReset.addEventListener("click", resetControls);
   els.btnExport.addEventListener("click", exportPng);
   els.btnExportPdf.addEventListener("click", exportPdf);
+  els.btnExportSvg.addEventListener("click", exportSvg);
   els.btnFit.addEventListener("click", fitOutputToSource);
   els.btnRedraw.addEventListener("click", () => {
     renderToken++;
