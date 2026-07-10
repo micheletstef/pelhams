@@ -24,16 +24,46 @@
         </fieldset>
 
         <fieldset>
-          <legend>Cylinder</legend>
+          <legend>Bottle</legend>
+          <p>
+            <label>Diameter <input id="diameter" type="number" min="10" max="500" value="70" step="0.1" size="6" /></label>
+            <span id="diameter-unit">mm</span>
+          </p>
+          <p>
+            <label>Height <input id="bottle-height" type="number" min="10" max="1000" value="220" step="0.1" size="6" /></label>
+            <span>mm</span>
+          </p>
+          <p id="bottle-stats" class="stats"></p>
+        </fieldset>
+
+        <fieldset>
+          <legend>Label</legend>
+          <p>
+            <label>Width <input id="label-width" type="number" min="5" max="2000" value="120" step="0.1" size="6" /></label>
+            <span>mm</span>
+            <small id="label-arc-readout"></small>
+          </p>
+          <p>
+            <label>Height <input id="label-height" type="number" min="5" max="1000" value="160" step="0.1" size="6" /></label>
+            <span>mm</span>
+          </p>
+          <p>
+            <label>Rotate <input id="rotate" type="range" min="-180" max="180" value="0" step="0.1" /></label>
+            <span id="rotate-val">0°</span>
+            <small>(spin around bottle)</small>
+          </p>
+          <p>
+            <label>Offset Y <input id="offset-y" type="range" min="-100" max="100" value="0" step="0.1" /></label>
+            <span id="offset-y-val">0%</span>
+          </p>
+        </fieldset>
+
+        <fieldset>
+          <legend>Projection</legend>
           <p>
             <label>Wrap <input id="curvature" type="range" min="0" max="1" value="1" step="0.01" /></label>
             <span id="curvature-val">1.00</span>
-            <small>(0 = flat, 1 = bottle)</small>
-          </p>
-          <p>
-            <label>Label arc <input id="arc" type="range" min="60" max="180" value="140" step="1" /></label>
-            <span id="arc-val">140°</span>
-            <small>(how much label wraps around)</small>
+            <small>(0 = flat, 1 = true cylinder)</small>
           </p>
           <p>
             <label>Edge squash <input id="edge-warp" type="range" min="0.5" max="2" value="1" step="0.01" /></label>
@@ -42,17 +72,11 @@
           <p>
             <label>Horiz. curve <input id="v-bow" type="range" min="-1" max="1" value="0" step="0.01" /></label>
             <span id="v-bow-val">0.00</span>
-            <small>(elliptical arc on horizontals)</small>
           </p>
           <p>
             <label>Perspective <input id="perspective" type="range" min="0" max="1.5" value="0" step="0.01" /></label>
             <span id="perspective-val">0.00</span>
-            <small>(vertical squash toward edges)</small>
           </p>
-        </fieldset>
-
-        <fieldset>
-          <legend>Transform</legend>
           <p>
             <label>Scale X <input id="scale-x" type="range" min="0.2" max="3" value="1" step="0.01" /></label>
             <span id="scale-x-val">1.00</span>
@@ -62,16 +86,8 @@
             <span id="scale-y-val">1.00</span>
           </p>
           <p>
-            <label>Rotate <input id="rotate" type="range" min="-180" max="180" value="0" step="0.1" /></label>
-            <span id="rotate-val">0°</span>
-          </p>
-          <p>
             <label>Offset X <input id="offset-x" type="range" min="-100" max="100" value="0" step="0.1" /></label>
             <span id="offset-x-val">0%</span>
-          </p>
-          <p>
-            <label>Offset Y <input id="offset-y" type="range" min="-100" max="100" value="0" step="0.1" /></label>
-            <span id="offset-y-val">0%</span>
           </p>
         </fieldset>
 
@@ -80,12 +96,10 @@
           <p>
             <label>Edge fade <input id="edge-fade" type="range" min="0" max="1" value="0" step="0.01" /></label>
             <span id="edge-fade-val">0.00</span>
-            <small>(fade out left/right edges)</small>
           </p>
           <p>
             <label>Fade start <input id="fade-start" type="range" min="0" max="100" value="60" step="1" /></label>
             <span id="fade-start-val">60%</span>
-            <small>(how far in from center the fade begins)</small>
           </p>
           <p>
             <label>Crop sides <input id="crop" type="range" min="0" max="40" value="0" step="0.5" /></label>
@@ -97,12 +111,15 @@
           <p>
             <label><input id="show-guides" type="checkbox" /> Show guides</label>
           </p>
+          <p>
+            <label><input id="match-aspect" type="checkbox" checked /> Match output to bottle aspect</label>
+          </p>
         </fieldset>
 
         <fieldset>
           <legend>Output</legend>
           <p>
-            <label>Width <input id="out-w" type="number" min="200" max="8000" value="1600" step="1" size="6" /></label>
+            <label>Width <input id="out-w" type="number" min="200" max="8000" value="1400" step="1" size="6" /></label>
             <label>Height <input id="out-h" type="number" min="200" max="8000" value="2000" step="1" size="6" /></label>
           </p>
           <p>
@@ -117,7 +134,6 @@
           </p>
           <p>
             <label>Path detail <input id="path-detail" type="number" min="4" max="40" value="12" step="1" size="4" /></label>
-            <small>(points per curve segment for vector export)</small>
           </p>
           <p>
             <button type="button" id="btn-reset">Reset</button>
@@ -132,8 +148,16 @@
 
       <main class="stage">
         <p id="status">Upload a PDF or SVG to begin</p>
-        <div class="viewport" id="viewport">
-          <canvas id="preview" width="1600" height="2000"></canvas>
+        <div class="stage-body">
+          <div class="viewport" id="viewport">
+            <canvas id="preview" width="1400" height="2000"></canvas>
+          </div>
+          <aside class="topview-panel">
+            <h2>Top view</h2>
+            <canvas id="topview" width="280" height="280"></canvas>
+            <p id="topview-stats" class="stats"></p>
+            <p class="hint">Circle = bottle · thick arc = label · dashed chord = front view</p>
+          </aside>
         </div>
       </main>
     </div>

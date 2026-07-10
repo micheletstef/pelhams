@@ -16,7 +16,7 @@ body {
 
 .app {
   display: grid;
-  grid-template-columns: 280px 1fr;
+  grid-template-columns: 300px 1fr;
   height: 100vh;
 }
 
@@ -56,6 +56,18 @@ small {
   font-size: 11px;
 }
 
+.stats {
+  color: #333;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.hint {
+  color: #666;
+  font-size: 11px;
+  margin: 8px 0 0;
+}
+
 input[type="range"] {
   width: 140px;
   vertical-align: middle;
@@ -84,14 +96,21 @@ input[type="number"] {
   font-size: 12px;
 }
 
-.viewport {
+.stage-body {
   flex: 1;
+  display: grid;
+  grid-template-columns: 1fr 300px;
+  min-height: 0;
+}
+
+.viewport {
   overflow: auto;
   padding: 24px;
   background: #fff;
   display: flex;
   align-items: center;
   justify-content: center;
+  border-right: 1px solid #ccc;
 }
 
 #preview {
@@ -104,7 +123,28 @@ input[type="number"] {
   background: #fff;
 }
 
-@media (max-width: 700px) {
+.topview-panel {
+  padding: 16px;
+  overflow: auto;
+  background: #fafafa;
+}
+
+.topview-panel h2 {
+  margin: 0 0 12px;
+  font-size: 13px;
+  font-weight: bold;
+}
+
+#topview {
+  display: block;
+  width: 100%;
+  max-width: 280px;
+  height: auto;
+  border: 1px solid #999;
+  background: #fff;
+}
+
+@media (max-width: 900px) {
   .app {
     grid-template-columns: 1fr;
     height: auto;
@@ -113,10 +153,15 @@ input[type="number"] {
   .panel {
     border-right: none;
     border-bottom: 1px solid #ccc;
-    max-height: none;
   }
 
-  .stage {
+  .stage-body {
+    grid-template-columns: 1fr;
+  }
+
+  .viewport {
+    border-right: none;
+    border-bottom: 1px solid #ccc;
     min-height: 50vh;
   }
 }

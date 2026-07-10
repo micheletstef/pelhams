@@ -10,8 +10,13 @@ const els = {
   fileLabel: $("file-label"),
   pdfPage: $("pdf-page"),
   sourceDpi: $("source-dpi"),
+  diameter: $("diameter"),
+  bottleHeight: $("bottle-height"),
+  bottleStats: $("bottle-stats"),
+  labelWidth: $("label-width"),
+  labelHeight: $("label-height"),
+  labelArcReadout: $("label-arc-readout"),
   curvature: $("curvature"),
-  arc: $("arc"),
   edgeWarp: $("edge-warp"),
   vBow: $("v-bow"),
   perspective: $("perspective"),
@@ -25,6 +30,7 @@ const els = {
   crop: $("crop"),
   clipCylinder: $("clip-cylinder"),
   showGuides: $("show-guides"),
+  matchAspect: $("match-aspect"),
   outW: $("out-w"),
   outH: $("out-h"),
   bgMode: $("bg-mode"),
@@ -38,8 +44,9 @@ const els = {
   btnRedraw: $("btn-redraw"),
   status: $("status"),
   preview: $("preview"),
+  topview: $("topview"),
+  topviewStats: $("topview-stats"),
   curvatureVal: $("curvature-val"),
-  arcVal: $("arc-val"),
   edgeWarpVal: $("edge-warp-val"),
   vBowVal: $("v-bow-val"),
   perspectiveVal: $("perspective-val"),
@@ -54,8 +61,11 @@ const els = {
 };
 
 const DEFAULTS = {
+  diameter: 70,
+  bottleHeight: 220,
+  labelWidth: 120,
+  labelHeight: 160,
   curvature: 1,
-  arc: 140,
   edgeWarp: 1,
   vBow: 0,
   perspective: 0,
@@ -69,7 +79,8 @@ const DEFAULTS = {
   crop: 0,
   clipCylinder: true,
   showGuides: false,
-  outW: 1600,
+  matchAspect: true,
+  outW: 1400,
   outH: 2000,
   bgMode: "transparent",
   bgColor: "#808080",
@@ -96,15 +107,44 @@ let renderToken = 0;
 let rafPending = 0;
 
 const previewCtx = els.preview.getContext("2d", { alpha: true });
+const topviewCtx = els.topview.getContext("2d");
 
 function setStatus(msg) {
   els.status.textContent = msg;
 }
 
+/** Physical bottle + label geometry derived from mm inputs. */
+function bottleGeometry(controls) {
+  const diameter = Math.max(1, controls.diameter);
+  const radius = diameter / 2;
+  const circumference = Math.PI * diameter;
+  const bottleHeight = Math.max(1, controls.bottleHeight);
+  const labelWidth = Math.max(0.1, controls.labelWidth);
+  const labelHeight = Math.max(0.1, controls.labelHeight);
+  // Arc the label covers on the cylinder (radians / degrees)
+  const labelArcRad = labelWidth / radius; // s = Rθ ⇒ θ = s/R
+  const labelArcDeg = (labelArcRad * 180) / Math.PI;
+  const coverage = labelWidth / circumference; // fraction of full wrap
+  return {
+    diameter,
+    radius,
+    circumference,
+    bottleHeight,
+    labelWidth,
+    labelHeight,
+    labelArcRad,
+    labelArcDeg,
+    coverage,
+  };
+}
+
 function readControls() {
   return {
+    diameter: Number(els.diameter.value) || DEFAULTS.diameter,
+    bottleHeight: Number(els.bottleHeight.value) || DEFAULTS.bottleHeight,
+    labelWidth: Number(els.labelWidth.value) || DEFAULTS.labelWidth,
+    labelHeight: Number(els.labelHeight.value) || DEFAULTS.labelHeight,
     wrap: Number(els.curvature.value),
-    labelArcDeg: Number(els.arc.value),
     edgeSquash: Number(els.edgeWarp.value),
     hCurve: Number(els.vBow.value),
     perspective: Number(els.perspective.value),
@@ -118,6 +158,7 @@ function readControls() {
     crop: Number(els.crop.value) / 100,
     clipCylinder: els.clipCylinder.checked,
     showGuides: els.showGuides.checked,
+    matchAspect: els.matchAspect.checked,
     outW: Math.max(64, Math.round(Number(els.outW.value) || DEFAULTS.outW)),
     outH: Math.max(64, Math.round(Number(els.outH.value) || DEFAULTS.outH)),
     bgMode: els.bgMode.value,
@@ -128,8 +169,8 @@ function readControls() {
 
 function updateLabels() {
   const c = readControls();
+  const g = bottleGeometry(c);
   els.curvatureVal.textContent = c.wrap.toFixed(2);
-  els.arcVal.textContent = `${Math.round(c.labelArcDeg)}°`;
   els.edgeWarpVal.textContent = c.edgeSquash.toFixed(2);
   els.vBowVal.textContent = c.hCurve.toFixed(2);
   els.perspectiveVal.textContent = c.perspective.toFixed(2);
@@ -142,32 +183,44 @@ function updateLabels() {
   els.fadeStartVal.textContent = `${Math.round(c.fadeStart * 100)}%`;
   els.cropVal.textContent = `${(c.crop * 100).toFixed(1)}%`;
   els.bgColor.disabled = c.bgMode !== "solid";
+  els.bottleStats.textContent = `Circumference ${g.circumference.toFixed(1)} mm · radius ${g.radius.toFixed(1)} mm`;
+  els.labelArcReadout.textContent = `→ ${g.labelArcDeg.toFixed(1)}° around bottle (${(g.coverage * 100).toFixed(0)}% of circumference)`;
 }
 
 /**
- * Bottle projection: screen X is the orthographic view of a vertical cylinder.
- * x = R · sin(θ)  ⇒  θ = asin(x/R)
- * Verticals stay vertical. Horizontals only bend if hCurve ≠ 0.
+ * Screen X → cylinder angle θ (radians from front center).
+ * Orthographic: x = R·sin(θ) ⇒ θ = asin(nx). wrap blends flat↔cylinder.
  */
-function screenXToSurfaceU(nx, wrap, edgeSquash) {
+function screenXToTheta(nx, wrap, edgeSquash, labelArcRad) {
   const x = Math.max(-1, Math.min(1, nx));
-  // Normalized surface coordinate in [-1, 1]: flat vs cylindrical
-  const flat = x;
-  const cyl = Math.asin(x) / (Math.PI / 2); // foreshortens toward edges
-  let u = flat * (1 - wrap) + cyl * wrap;
-
-  // edgeSquash 1 = physical; >1 stronger compression at rims; <1 softer
+  const halfArc = labelArcRad / 2;
+  const flat = x * halfArc; // linear across label arc
+  let cyl = Math.asin(x); // physical foreshortening on visible front
+  // Remap asin range so |x|=1 lands at ±min(π/2, halfArc) feel — keep true asin for bottle
+  // Artistic edge squash
   if (edgeSquash !== 1) {
     const s = Math.max(0.2, edgeSquash);
-    u = Math.sign(u) * Math.pow(Math.abs(u), s);
+    const t = Math.sign(cyl) * Math.pow(Math.abs(cyl) / (Math.PI / 2), s) * (Math.PI / 2);
+    cyl = t;
   }
-  return u; // -1 .. 1 across the front of the bottle
+  return flat * (1 - wrap) + cyl * wrap;
+}
+
+function thetaToScreenX(theta, wrap, edgeSquash, labelArcRad) {
+  // Inverse via binary search
+  let lo = -1;
+  let hi = 1;
+  for (let i = 0; i < 32; i++) {
+    const mid = (lo + hi) / 2;
+    const val = screenXToTheta(mid, wrap, edgeSquash, labelArcRad);
+    if (val < theta) lo = mid;
+    else hi = mid;
+  }
+  return (lo + hi) / 2;
 }
 
 /**
- * Vertical offset for horizontal lines so they follow a circular/elliptical
- * arc (like a bottle ring seen with a slight camera pitch).
- * Uses 1 − cos(θ) = 1 − √(1 − x²), not a parabola.
+ * Vertical offset for horizontal lines (elliptical arc).
  */
 function horizontalCurveOffset(nx, hCurve) {
   if (!hCurve) return 0;
@@ -176,24 +229,18 @@ function horizontalCurveOffset(nx, hCurve) {
   return hCurve * 0.45 * (1 - cosTheta);
 }
 
-/** Depth factor on cylinder face: 1 at center, 0 at rim. */
 function cylinderDepth(nx) {
   const x = Math.max(-1, Math.min(1, nx));
   return Math.sqrt(Math.max(0, 1 - x * x));
 }
 
-/**
- * Soft left/right edge fade.
- * fadeStart: 0..1 — distance from center where fade begins (0 = from center, 1 = only at rim).
- * edgeFade: 0..1 — how strongly alpha drops toward the rim.
- */
 function edgeFadeAlpha(nx, edgeFade, fadeStart) {
   if (edgeFade <= 0) return 1;
   const absX = Math.min(1, Math.abs(nx));
   const start = Math.max(0, Math.min(0.99, fadeStart));
   if (absX <= start) return 1;
-  const t = (absX - start) / (1 - start); // 0 at fade start → 1 at rim
-  const smooth = t * t * (3 - 2 * t); // smoothstep
+  const t = (absX - start) / (1 - start);
+  const smooth = t * t * (3 - 2 * t);
   return 1 - edgeFade * smooth;
 }
 
@@ -350,6 +397,9 @@ function drawGuides(ctx, width, height, controls) {
 
 function scheduleRender() {
   updateLabels();
+  const controls = readControls();
+  syncOutputAspect(controls);
+  drawTopView(readControls());
   if (rafPending) cancelAnimationFrame(rafPending);
   rafPending = requestAnimationFrame(() => {
     rafPending = 0;
@@ -409,59 +459,164 @@ function exportBaseName() {
 
 /**
  * Same source→output mapping as the pixel preview (for one X).
- * Returns normalized source U/V for a normalized output position.
+ * Uses physical bottle diameter + label width: θ = asin(x/R), u from label arc.
  */
 function sampleSourceUV(nx, ny, controls) {
-  const labelSpan = Math.max(0.15, Math.min(1, controls.labelArcDeg / 180));
-  const rotateU = controls.rotateDeg / 180;
-  const surface = screenXToSurfaceU(nx, controls.wrap, controls.edgeSquash);
-  const u = 0.5 + (surface * (labelSpan * 0.5)) / controls.scaleX + controls.offsetX + rotateU;
+  const g = bottleGeometry(controls);
+  const rotateRad = (controls.rotateDeg * Math.PI) / 180;
+  const theta = screenXToTheta(nx, controls.wrap, controls.edgeSquash, g.labelArcRad);
+  // Label centered at rotate=0 covers [-α/2, α/2]
+  let u = (theta - rotateRad) / (g.labelArcRad / controls.scaleX) + 0.5 + controls.offsetX;
 
-  // Perspective: foreshorten vertical scale toward the rims (deeper = smaller)
   const depth = cylinderDepth(nx);
   const perspScale = 1 + controls.perspective * (1 - depth);
+  // Vertical: label height relative to bottle; output frame = label height band
   const v =
     0.5 +
     (ny - 0.5 - controls.offsetY) / (controls.scaleY * perspScale) +
     horizontalCurveOffset(nx, controls.hCurve);
-  return { u, v };
+  return { u, v, theta };
 }
 
-/** Invert screenXToSurfaceU with binary search → nx in [-1, 1]. */
-function surfaceUToScreenX(surface, wrap, edgeSquash) {
-  const target = Math.max(-1, Math.min(1, surface));
-  let lo = -1;
-  let hi = 1;
-  for (let i = 0; i < 32; i++) {
-    const mid = (lo + hi) / 2;
-    const val = screenXToSurfaceU(mid, wrap, edgeSquash);
-    if (val < target) lo = mid;
-    else hi = mid;
-  }
-  return (lo + hi) / 2;
-}
-
-/**
- * Inverse of the preview mapping: source UV (0..1) → output pixel XY.
- * Keeps shapes continuous (no strip slicing).
- */
+/** Inverse: source UV → output pixel XY (for vector path warping). */
 function sourceUVToOutputXY(u, v, controls, outW, outH) {
-  const labelSpan = Math.max(0.15, Math.min(1, controls.labelArcDeg / 180));
-  const rotateU = controls.rotateDeg / 180;
-  const usableHalf = Math.max(0.01, 1 - controls.crop);
-
-  const halfSpan = (labelSpan * 0.5) / controls.scaleX || 1e-6;
-  const surface = (u - 0.5 - controls.offsetX - rotateU) / halfSpan;
-  const nx = surfaceUToScreenX(surface, controls.wrap, controls.edgeSquash);
+  const g = bottleGeometry(controls);
+  const rotateRad = (controls.rotateDeg * Math.PI) / 180;
+  const theta = (u - 0.5 - controls.offsetX) * (g.labelArcRad / controls.scaleX) + rotateRad;
+  const nx = thetaToScreenX(theta, controls.wrap, controls.edgeSquash, g.labelArcRad);
 
   const depth = cylinderDepth(nx);
   const perspScale = 1 + controls.perspective * (1 - depth);
   const hOff = horizontalCurveOffset(nx, controls.hCurve);
   const ny = (v - 0.5 - hOff) * controls.scaleY * perspScale + 0.5 + controls.offsetY;
 
+  const usableHalf = Math.max(0.01, 1 - controls.crop);
   const x = ((nx * usableHalf + 1) / 2) * outW;
   const y = ny * outH;
   return { x, y, nx, fade: edgeFadeAlpha(nx, controls.edgeFade, controls.fadeStart) };
+}
+
+/** Draw top-down bottle diagram: circle + label arc + front chord. */
+function drawTopView(controls) {
+  const canvas = els.topview;
+  const ctx = topviewCtx;
+  const w = canvas.width;
+  const h = canvas.height;
+  const g = bottleGeometry(controls);
+
+  ctx.clearRect(0, 0, w, h);
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(0, 0, w, h);
+
+  const cx = w / 2;
+  const cy = h / 2;
+  const r = Math.min(w, h) * 0.36;
+
+  // Bottle body
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, 0, Math.PI * 2);
+  ctx.fillStyle = "#f0f0f0";
+  ctx.fill();
+  ctx.strokeStyle = "#000";
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  // Front = bottom of diagram. World angle 0 at front (down), positive CCW in bottle space.
+  // Canvas angle: 0 = right, CW positive in arc()... use: canvasAng = π/2 + worldAng
+  const rot = (controls.rotateDeg * Math.PI) / 180;
+  const half = g.labelArcRad / 2;
+  const startWorld = -half + rot;
+  const endWorld = half + rot;
+  const toCanvas = (worldAng) => Math.PI / 2 + worldAng;
+
+  // Label arc (thick)
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, toCanvas(startWorld), toCanvas(endWorld), false);
+  ctx.strokeStyle = "#000";
+  ctx.lineWidth = Math.max(6, r * 0.12);
+  ctx.lineCap = "butt";
+  ctx.stroke();
+
+  // Label edge ticks
+  const tick = (worldAng) => {
+    const a = toCanvas(worldAng);
+    const x0 = cx + Math.cos(a) * (r - 8);
+    const y0 = cy + Math.sin(a) * (r - 8);
+    const x1 = cx + Math.cos(a) * (r + 10);
+    const y1 = cy + Math.sin(a) * (r + 10);
+    ctx.beginPath();
+    ctx.moveTo(x0, y0);
+    ctx.lineTo(x1, y1);
+    ctx.stroke();
+  };
+  ctx.lineWidth = 1.5;
+  tick(startWorld);
+  tick(endWorld);
+
+  // Visible front chord (silhouette left–right)
+  ctx.setLineDash([4, 3]);
+  ctx.strokeStyle = "#666";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(cx - r, cy);
+  ctx.lineTo(cx + r, cy);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Camera / front marker at bottom
+  ctx.fillStyle = "#000";
+  ctx.beginPath();
+  ctx.moveTo(cx, cy + r + 18);
+  ctx.lineTo(cx - 7, cy + r + 6);
+  ctx.lineTo(cx + 7, cy + r + 6);
+  ctx.closePath();
+  ctx.fill();
+  ctx.font = "11px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.fillText("front", cx, cy + r + 32);
+
+  // Center cross
+  ctx.strokeStyle = "#999";
+  ctx.beginPath();
+  ctx.moveTo(cx - 5, cy);
+  ctx.lineTo(cx + 5, cy);
+  ctx.moveTo(cx, cy - 5);
+  ctx.lineTo(cx, cy + 5);
+  ctx.stroke();
+
+  // Diameter dimension line
+  ctx.strokeStyle = "#000";
+  ctx.fillStyle = "#000";
+  ctx.lineWidth = 1;
+  const dimY = cy - r - 16;
+  ctx.beginPath();
+  ctx.moveTo(cx - r, dimY);
+  ctx.lineTo(cx + r, dimY);
+  ctx.moveTo(cx - r, dimY - 4);
+  ctx.lineTo(cx - r, dimY + 4);
+  ctx.moveTo(cx + r, dimY - 4);
+  ctx.lineTo(cx + r, dimY + 4);
+  ctx.stroke();
+  ctx.font = "11px system-ui, sans-serif";
+  ctx.fillText(`Ø ${g.diameter} mm`, cx, dimY - 6);
+
+  els.topviewStats.innerHTML =
+    `Label arc <b>${g.labelArcDeg.toFixed(1)}°</b><br>` +
+    `Wraps <b>${(g.coverage * 100).toFixed(0)}%</b> of circumference<br>` +
+    `Visible width = diameter <b>${g.diameter} mm</b><br>` +
+    `Label <b>${g.labelWidth}×${g.labelHeight} mm</b>`;
+}
+
+function syncOutputAspect(controls) {
+  if (!controls.matchAspect) return;
+  const g = bottleGeometry(controls);
+  // Front view aspect ≈ diameter : label height
+  const aspect = g.diameter / g.labelHeight;
+  const h = controls.outH;
+  const w = Math.max(64, Math.round(h * aspect));
+  if (Number(els.outW.value) !== w) {
+    els.outW.value = String(w);
+  }
 }
 
 function setExportBusy(busy) {
@@ -1279,8 +1434,11 @@ async function reloadPdfPage() {
 }
 
 function resetControls() {
+  els.diameter.value = DEFAULTS.diameter;
+  els.bottleHeight.value = DEFAULTS.bottleHeight;
+  els.labelWidth.value = DEFAULTS.labelWidth;
+  els.labelHeight.value = DEFAULTS.labelHeight;
   els.curvature.value = DEFAULTS.curvature;
-  els.arc.value = DEFAULTS.arc;
   els.edgeWarp.value = DEFAULTS.edgeWarp;
   els.vBow.value = DEFAULTS.vBow;
   els.perspective.value = DEFAULTS.perspective;
@@ -1294,21 +1452,29 @@ function resetControls() {
   els.crop.value = DEFAULTS.crop;
   els.clipCylinder.checked = DEFAULTS.clipCylinder;
   els.showGuides.checked = DEFAULTS.showGuides;
+  els.matchAspect.checked = DEFAULTS.matchAspect;
   els.outW.value = DEFAULTS.outW;
   els.outH.value = DEFAULTS.outH;
   els.bgMode.value = DEFAULTS.bgMode;
   els.bgColor.value = DEFAULTS.bgColor;
   els.pathDetail.value = DEFAULTS.pathDetail;
-  updateLabels();
   scheduleRender();
 }
 
 function fitOutputToSource() {
   if (!sourceCanvas) return;
-  const maxW = 2400;
-  const scale = Math.min(1, maxW / sourceCanvas.width);
-  els.outW.value = Math.round(sourceCanvas.width * scale);
-  els.outH.value = Math.round(sourceCanvas.height * scale);
+  const controls = readControls();
+  if (controls.matchAspect) {
+    const g = bottleGeometry(controls);
+    const h = Math.min(2400, Math.max(400, Math.round(sourceCanvas.height)));
+    els.outH.value = h;
+    els.outW.value = Math.max(64, Math.round(h * (g.diameter / g.labelHeight)));
+  } else {
+    const maxW = 2400;
+    const scale = Math.min(1, maxW / sourceCanvas.width);
+    els.outW.value = Math.round(sourceCanvas.width * scale);
+    els.outH.value = Math.round(sourceCanvas.height * scale);
+  }
   scheduleRender();
 }
 
@@ -1320,7 +1486,6 @@ function bindUi() {
     if (file) onFile(file);
   });
 
-  // Allow dropping a file anywhere on the page
   ["dragenter", "dragover"].forEach((evt) => {
     document.addEventListener(evt, (e) => e.preventDefault());
   });
@@ -1331,8 +1496,11 @@ function bindUi() {
   });
 
   const live = [
+    els.diameter,
+    els.bottleHeight,
+    els.labelWidth,
+    els.labelHeight,
     els.curvature,
-    els.arc,
     els.edgeWarp,
     els.vBow,
     els.perspective,
@@ -1346,6 +1514,7 @@ function bindUi() {
     els.crop,
     els.clipCylinder,
     els.showGuides,
+    els.matchAspect,
     els.outW,
     els.outH,
     els.bgMode,
@@ -1369,7 +1538,7 @@ function bindUi() {
     renderPreview();
   });
 
-  updateLabels();
+  scheduleRender();
 }
 
 bindUi();
