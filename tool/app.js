@@ -28,6 +28,7 @@ const els = {
   crop: $("crop"),
   clipCylinder: $("clip-cylinder"),
   showGuides: $("show-guides"),
+  showMockup: $("show-mockup"),
   matchAspect: $("match-aspect"),
   outW: $("out-w"),
   outH: $("out-h"),
@@ -60,7 +61,7 @@ const els = {
   cropVal: $("crop-val"),
 };
 
-/** Fixed bottle: Univerre Rheinwein BVS30H60 75cl white 350mm */
+/** Fixed bottle: Univerre Rheinwein BVS30H60 75cl white 350mm (from tech drawing) */
 const BOTTLE = {
   name: "Rheinwein BVS30H60 75cl",
   diameter: 77.7, // body Ø mm
@@ -69,6 +70,22 @@ const BOTTLE = {
   finishOd: 28.9,
   neckOd: 25.5,
   fillFromTop: 59.5,
+  // Front-view asset cropped from the Univerre PDF outline
+  frontSrc: "assets/rhine-bottle-front.png",
+  // Label panel as fraction of image height (from top)
+  bodyTopFrac: (349 - 12 - 105) / 349,
+  bodyBotFrac: (349 - 8) / 349,
+};
+
+/** Photo mockup (amber bottle cutout) — label composites onto the cylindrical body. */
+const MOCKUP = {
+  src: "assets/bottle-mockup.png",
+  // Calibrated from the photo: parallel body band
+  bodyTopFrac: 0.565,
+  bodyBotFrac: 0.97,
+  bodyLeftFrac: 0.02,
+  bodyRightFrac: 0.98,
+  highlightStrength: 0.4,
 };
 
 const DEFAULTS = {
@@ -88,9 +105,10 @@ const DEFAULTS = {
   crop: 0,
   clipCylinder: true,
   showGuides: false,
+  showMockup: true,
   matchAspect: true,
-  outW: 1400,
-  outH: 2000,
+  outW: 420,
+  outH: 2048,
   bgMode: "transparent",
   bgColor: "#808080",
   pdfPage: 1,
@@ -115,7 +133,54 @@ let sourceName = "";
 let renderToken = 0;
 let rafPending = 0;
 
+/** @type {HTMLImageElement | null} */
+let mockupImage = null;
+/** @type {HTMLCanvasElement | null} */
+let mockupHighlights = null;
+
 const previewCtx = els.preview.getContext("2d", { alpha: true });
+
+function loadMockup() {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      mockupImage = img;
+      mockupHighlights = buildHighlightLayer(img);
+      resolve(img);
+    };
+    img.onerror = () => {
+      console.warn("Bottle mockup failed to load");
+      resolve(null);
+    };
+    img.src = MOCKUP.src;
+  });
+}
+
+/** Extract specular highlights from the bottle photo for glass realism. */
+function buildHighlightLayer(img) {
+  const c = document.createElement("canvas");
+  c.width = img.naturalWidth;
+  c.height = img.naturalHeight;
+  const ctx = c.getContext("2d");
+  ctx.drawImage(img, 0, 0);
+  const data = ctx.getImageData(0, 0, c.width, c.height);
+  const d = data.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const r = d[i];
+    const g = d[i + 1];
+    const b = d[i + 2];
+    const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+    // Keep only bright specular; crush the rest to black for screen blend
+    const t = Math.max(0, (lum - 140) / 115);
+    const v = Math.round(255 * t * t);
+    d[i] = v;
+    d[i + 1] = v;
+    d[i + 2] = v;
+    d[i + 3] = lum > 8 ? 255 : 0;
+  }
+  ctx.putImageData(data, 0, 0);
+  return c;
+}
 
 function setStatus(msg) {
   els.status.textContent = msg;
@@ -168,6 +233,7 @@ function readControls() {
     crop: Number(els.crop.value) / 100,
     clipCylinder: els.clipCylinder.checked,
     showGuides: els.showGuides.checked,
+    showMockup: els.showMockup.checked,
     matchAspect: els.matchAspect.checked,
     outW: Math.max(64, Math.round(Number(els.outW.value) || DEFAULTS.outW)),
     outH: Math.max(64, Math.round(Number(els.outH.value) || DEFAULTS.outH)),
@@ -406,6 +472,85 @@ function drawGuides(ctx, width, height, controls) {
   ctx.restore();
 }
 
+function mockupBodyRect(width, height, controls) {
+  const g = bottleGeometry(controls);
+  const panelTop = height * MOCKUP.bodyTopFrac;
+  const panelBot = height * MOCKUP.bodyBotFrac;
+  const panelH = Math.max(1, panelBot - panelTop);
+  const panelLeft = width * MOCKUP.bodyLeftFrac;
+  const panelRight = width * MOCKUP.bodyRightFrac;
+  const panelW = Math.max(1, panelRight - panelLeft);
+
+  // Label height as fraction of the physical label panel
+  const labelH = Math.min(
+    panelH * 1.15,
+    panelH * (g.labelHeight / BOTTLE.labelPanel) * controls.scaleY
+  );
+  const visFrac = Math.min(1, g.visibleLabelWidth / g.width);
+  const labelW = Math.min(panelW, panelW * visFrac * controls.scaleX);
+
+  let lx = panelLeft + (panelW - labelW) / 2 + controls.offsetX * panelW;
+  let ly = panelTop + (panelH - labelH) / 2 + controls.offsetY * panelH;
+  lx = Math.max(panelLeft, Math.min(panelRight - labelW, lx));
+  ly = Math.max(panelTop - labelH * 0.15, Math.min(panelBot - labelH * 0.85, ly));
+
+  return {
+    panelLeft,
+    panelTop,
+    panelW,
+    panelH,
+    lx,
+    ly,
+    labelW: Math.max(2, labelW),
+    labelH: Math.max(2, labelH),
+  };
+}
+
+/** Draw bottle photo + warped label into ctx at width×height. */
+function paintMockup(ctx, width, height, labelImage, controls) {
+  ctx.clearRect(0, 0, width, height);
+
+  if (controls.bgMode === "solid") {
+    ctx.fillStyle = controls.bgColor;
+    ctx.fillRect(0, 0, width, height);
+  } else {
+    // Photo has a black studio backdrop
+    ctx.fillStyle = "#000";
+    ctx.fillRect(0, 0, width, height);
+  }
+
+  if (mockupImage) {
+    ctx.drawImage(mockupImage, 0, 0, width, height);
+  }
+
+  if (!labelImage) return;
+
+  const rect = mockupBodyRect(width, height, controls);
+  const lw = labelImage.width;
+  const lh = labelImage.height;
+
+  const tmp = document.createElement("canvas");
+  tmp.width = lw;
+  tmp.height = lh;
+  tmp.getContext("2d").putImageData(labelImage, 0, 0);
+
+  ctx.save();
+  // Opaque paper label on the body, then restore glass speculars
+  ctx.drawImage(tmp, rect.lx, rect.ly, rect.labelW, rect.labelH);
+
+  if (mockupHighlights) {
+    ctx.globalCompositeOperation = "screen";
+    ctx.globalAlpha = MOCKUP.highlightStrength;
+    ctx.beginPath();
+    ctx.rect(rect.lx, rect.ly, rect.labelW, rect.labelH);
+    ctx.clip();
+    ctx.drawImage(mockupHighlights, 0, 0, width, height);
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = "source-over";
+  }
+  ctx.restore();
+}
+
 function scheduleRender() {
   updateLabels();
   const controls = readControls();
@@ -420,9 +565,9 @@ function scheduleRender() {
 }
 
 function renderPreview() {
-  if (!sourceData) return;
-
   const controls = readControls();
+  if (!sourceData && !(controls.showMockup && mockupImage)) return;
+
   const token = ++renderToken;
 
   // High-res preview: match output size (cap only for very large exports)
@@ -432,24 +577,53 @@ function renderPreview() {
   const h = Math.max(64, Math.round(controls.outH * scale));
 
   setStatus("Rendering…");
-  // Yield so UI can update, then warp
   setTimeout(() => {
     if (token !== renderToken) return;
     const t0 = performance.now();
-    const image = warpToImageData(sourceData, controls, w, h);
-    if (token !== renderToken) return;
 
     els.preview.width = w;
     els.preview.height = h;
-    previewCtx.putImageData(image, 0, 0);
-    drawGuides(previewCtx, w, h, controls);
+
+    if (controls.showMockup && mockupImage) {
+      let labelImage = null;
+      if (sourceData) {
+        const rect = mockupBodyRect(w, h, controls);
+        const lw = Math.max(64, Math.round(rect.labelW));
+        const lh = Math.max(64, Math.round(rect.labelH));
+        labelImage = warpToImageData(sourceData, controls, lw, lh);
+      }
+      if (token !== renderToken) return;
+      paintMockup(previewCtx, w, h, labelImage, controls);
+      if (sourceData) drawGuidesOnMockup(previewCtx, w, h, controls);
+    } else if (sourceData) {
+      const image = warpToImageData(sourceData, controls, w, h);
+      if (token !== renderToken) return;
+      previewCtx.putImageData(image, 0, 0);
+      drawGuides(previewCtx, w, h, controls);
+    }
 
     const ms = Math.round(performance.now() - t0);
-    setStatus(`${sourceName} · ${controls.outW}×${controls.outH} · preview ${w}×${h} · ${ms}ms`);
+    setStatus(
+      `${sourceName || "mockup"} · ${controls.outW}×${controls.outH} · preview ${w}×${h} · ${ms}ms`
+    );
     setExportBusy(false);
-    els.btnFit.disabled = false;
-    els.btnRedraw.disabled = false;
+    els.btnFit.disabled = !sourceData;
+    els.btnRedraw.disabled = !sourceData && !mockupImage;
   }, 0);
+}
+
+function drawGuidesOnMockup(ctx, width, height, controls) {
+  if (!controls.showGuides) return;
+  const rect = mockupBodyRect(width, height, controls);
+  ctx.save();
+  ctx.strokeStyle = "rgba(255,255,255,0.55)";
+  ctx.lineWidth = Math.max(1, width * 0.003);
+  ctx.setLineDash([6, 4]);
+  ctx.strokeRect(rect.panelLeft, rect.panelTop, rect.panelW, rect.panelH);
+  ctx.strokeStyle = "rgba(255,200,80,0.7)";
+  ctx.strokeRect(rect.lx, rect.ly, rect.labelW, rect.labelH);
+  ctx.setLineDash([]);
+  ctx.restore();
 }
 
 function downloadBlob(blob, filename) {
@@ -579,113 +753,70 @@ function drawTopView(controls) {
     `Label <b>${g.labelWidth}×${g.labelHeight} mm</b>`;
 }
 
-/** Front elevation: full Rhine bottle silhouette + label band. */
+/** Front elevation: real Univerre PDF outline + label band overlay. */
 function drawFrontView(controls) {
   const g = bottleGeometry(controls);
   const H = BOTTLE.height;
   const R = BOTTLE.diameter / 2;
-  const rFinish = BOTTLE.finishOd / 2;
-  const rNeck = BOTTLE.neckOd / 2;
 
-  // Profile radii from top (y=0) → base (y=H), mm. Approximates BVS30H60 flute.
-  const bodyTop = H - 12 - BOTTLE.labelPanel; // start of parallel body
-  const bodyBot = H - 12; // end of parallel body (above heel)
-  const profile = [
-    { y: 0, r: rFinish },
-    { y: 8, r: rFinish },
-    { y: 21.6, r: rFinish * 0.98 },
-    { y: 28, r: rNeck },
-    { y: BOTTLE.fillFromTop, r: rNeck * 1.05 },
-    { y: 110, r: rNeck * 1.35 },
-    { y: 170, r: R * 0.55 },
-    { y: 210, r: R * 0.82 },
-    { y: bodyTop, r: R },
-    { y: bodyBot, r: R },
-    { y: H - 4, r: R * 0.97 },
-    { y: H, r: R * 0.88 },
-  ];
+  // Overlay uses a normalized 100×100 viewBox mapped to the bottle image
+  const bodyTop = BOTTLE.bodyTopFrac * 100;
+  const bodyBot = BOTTLE.bodyBotFrac * 100;
+  const bodyH = bodyBot - bodyTop;
 
-  const w = 240;
-  const h = 420;
-  const padX = 36;
-  const padTop = 16;
-  const padBot = 36;
-  const scale = Math.min((w - padX * 2) / (R * 2), (h - padTop - padBot) / H);
-  const cx = w / 2;
-  const y0 = padTop;
-
-  const X = (r) => cx + r * scale;
-  const XL = (r) => cx - r * scale;
-  const Y = (mm) => y0 + mm * scale;
-
-  // Build closed bottle path (right side down, left side up)
-  let d = `M ${XL(profile[0].r).toFixed(1)} ${Y(profile[0].y).toFixed(1)}`;
-  for (let i = 1; i < profile.length; i++) {
-    d += ` L ${XL(profile[i].r).toFixed(1)} ${Y(profile[i].y).toFixed(1)}`;
-  }
-  for (let i = profile.length - 1; i >= 0; i--) {
-    d += ` L ${X(profile[i].r).toFixed(1)} ${Y(profile[i].y).toFixed(1)}`;
-  }
-  d += " Z";
-
-  // Label band on body (default panel sits on parallel section; offsetY shifts it)
-  const lh = Math.min(H * 0.9, g.labelHeight * controls.scaleY);
+  const lhMm = Math.min(H * 0.9, g.labelHeight * controls.scaleY);
+  const lh = (lhMm / H) * 100;
   const bodyMid = (bodyTop + bodyBot) / 2;
-  let labelMid = bodyMid + controls.offsetY * H;
-  let ly = labelMid - lh / 2;
-  ly = Math.max(bodyTop - 20, Math.min(bodyBot - lh + 20, ly));
+  let ly = bodyMid - lh / 2 + controls.offsetY * 50;
+  ly = Math.max(bodyTop - 5, Math.min(bodyBot - lh + 5, ly));
   const ly2 = ly + lh;
 
-  const visW = Math.min(R * 2, g.visibleLabelWidth);
-  const halfVis = (visW / 2) * scale;
-  let lx = cx - halfVis + controls.offsetX * R * 2 * scale;
-  const maxHalf = R * scale;
-  lx = Math.max(cx - maxHalf, Math.min(cx + maxHalf - halfVis * 2, lx));
+  const visFrac = Math.min(1, g.visibleLabelWidth / (R * 2));
+  const halfVis = (visFrac * 100) / 2;
+  // Bottle body fills most of image width; inset slightly for stroke padding in crop
+  const inset = 4;
+  const cx = 50 + controls.offsetX * 40;
+  let lx = cx - halfVis;
+  lx = Math.max(inset, Math.min(100 - inset - halfVis * 2, lx));
   const lx2 = lx + halfVis * 2;
-  const bow = controls.hCurve * (halfVis * 0.16);
+  const bow = controls.hCurve * halfVis * 0.12;
 
   const labelPath =
-    `M ${lx.toFixed(1)} ${(Y(ly) + bow).toFixed(1)}` +
-    ` Q ${((lx + lx2) / 2).toFixed(1)} ${(Y(ly) - bow).toFixed(1)} ${lx2.toFixed(1)} ${(Y(ly) + bow).toFixed(1)}` +
-    ` L ${lx2.toFixed(1)} ${(Y(ly2) - bow).toFixed(1)}` +
-    ` Q ${((lx + lx2) / 2).toFixed(1)} ${(Y(ly2) + bow).toFixed(1)} ${lx.toFixed(1)} ${(Y(ly2) - bow).toFixed(1)} Z`;
-
-  const dimY = Y(H) + 14;
-  const dimX = X(R) + 14;
-  const bxL = XL(R);
-  const bxR = X(R);
+    `M ${lx.toFixed(2)} ${(ly + bow).toFixed(2)}` +
+    ` Q ${((lx + lx2) / 2).toFixed(2)} ${(ly - bow).toFixed(2)} ${lx2.toFixed(2)} ${(ly + bow).toFixed(2)}` +
+    ` L ${lx2.toFixed(2)} ${(ly2 - bow).toFixed(2)}` +
+    ` Q ${((lx + lx2) / 2).toFixed(2)} ${(ly2 + bow).toFixed(2)} ${lx.toFixed(2)} ${(ly2 - bow).toFixed(2)} Z`;
 
   els.frontview.innerHTML = `
-    <svg viewBox="0 0 ${w} ${h}" xmlns="http://www.w3.org/2000/svg" role="img">
-      <path d="${d}" fill="#f0f0f0" stroke="#000" stroke-width="1.4"/>
-      <line x1="${cx}" y1="${Y(0)}" x2="${cx}" y2="${Y(H)}" stroke="#bbb" stroke-width="1" stroke-dasharray="3 3"/>
-      <line x1="${XL(R * 0.9)}" y1="${Y(BOTTLE.fillFromTop)}" x2="${X(R * 0.9)}" y2="${Y(BOTTLE.fillFromTop)}"
-        stroke="#999" stroke-width="1" stroke-dasharray="2 2"/>
-      <path d="${labelPath}" fill="rgba(0,0,0,0.1)" stroke="#000" stroke-width="1.4"/>
-      <text x="${cx}" y="${((Y(ly) + Y(ly2)) / 2 + 3).toFixed(1)}" text-anchor="middle" font-size="10" font-family="system-ui,sans-serif">label</text>
-      <line x1="${bxL}" y1="${dimY}" x2="${bxR}" y2="${dimY}" stroke="#000" stroke-width="1"/>
-      <line x1="${bxL}" y1="${dimY - 3}" x2="${bxL}" y2="${dimY + 3}" stroke="#000" stroke-width="1"/>
-      <line x1="${bxR}" y1="${dimY - 3}" x2="${bxR}" y2="${dimY + 3}" stroke="#000" stroke-width="1"/>
-      <text x="${cx}" y="${dimY + 14}" text-anchor="middle" font-size="11" font-family="system-ui,sans-serif">Ø ${BOTTLE.diameter} mm</text>
-      <line x1="${dimX}" y1="${Y(0)}" x2="${dimX}" y2="${Y(H)}" stroke="#000" stroke-width="1"/>
-      <line x1="${dimX - 3}" y1="${Y(0)}" x2="${dimX + 3}" y2="${Y(0)}" stroke="#000" stroke-width="1"/>
-      <line x1="${dimX - 3}" y1="${Y(H)}" x2="${dimX + 3}" y2="${Y(H)}" stroke="#000" stroke-width="1"/>
-      <text x="${dimX + 12}" y="${Y(H / 2)}" text-anchor="middle" font-size="11" font-family="system-ui,sans-serif"
-        transform="rotate(-90 ${dimX + 12} ${Y(H / 2)})">${BOTTLE.height} mm</text>
-    </svg>`;
+    <div class="bottle-diagram">
+      <img src="${BOTTLE.frontSrc}" alt="${BOTTLE.name} outline" draggable="false" />
+      <svg class="label-overlay" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+        <rect x="${inset}" y="${bodyTop.toFixed(2)}" width="${(100 - inset * 2).toFixed(2)}" height="${bodyH.toFixed(2)}"
+          fill="none" stroke="#999" stroke-width="0.4" stroke-dasharray="1.5 1.5" vector-effect="non-scaling-stroke"/>
+        <path d="${labelPath}" fill="rgba(0,0,0,0.12)" stroke="#000" stroke-width="0.6" vector-effect="non-scaling-stroke"/>
+        <text x="${cx.toFixed(2)}" y="${((ly + ly2) / 2).toFixed(2)}" text-anchor="middle" dominant-baseline="middle"
+          font-size="4" font-family="system-ui,sans-serif" fill="#000">label</text>
+      </svg>
+    </div>
+    <p class="dim-readout">Ø ${BOTTLE.diameter} mm · ${BOTTLE.height} mm</p>`;
 
   els.frontviewStats.innerHTML =
-    `Full bottle <b>${BOTTLE.height} mm</b> · body Ø <b>${BOTTLE.diameter} mm</b><br>` +
-    `Label panel on body ≈ <b>${BOTTLE.labelPanel} mm</b><br>` +
+    `Outline from Univerre PDF<br>` +
+    `Label panel ≈ <b>${BOTTLE.labelPanel} mm</b> on body<br>` +
     `Visible label width ≈ <b>${g.visibleLabelWidth.toFixed(1)} mm</b>`;
 }
 
 function syncOutputAspect(controls) {
   if (!controls.matchAspect) return;
-  const g = bottleGeometry(controls);
-  // Front view aspect ≈ bottle width : label height
-  const aspect = g.width / g.labelHeight;
   const h = controls.outH;
+  let aspect;
+  if (controls.showMockup && mockupImage) {
+    aspect = mockupImage.naturalWidth / mockupImage.naturalHeight;
+  } else {
+    const g = bottleGeometry(controls);
+    // Label-only artboard: bottle width × label height
+    aspect = g.width / g.labelHeight;
+  }
   const outW = Math.max(64, Math.round(h * aspect));
   if (Number(els.outW.value) !== outW) {
     els.outW.value = String(outW);
@@ -706,16 +837,26 @@ async function exportPng() {
 
   await new Promise((r) => setTimeout(r, 20));
   try {
-    const image = warpToImageData(sourceData, controls, controls.outW, controls.outH);
     const canvas = document.createElement("canvas");
     canvas.width = controls.outW;
     canvas.height = controls.outH;
     const ctx = canvas.getContext("2d");
-    ctx.putImageData(image, 0, 0);
+
+    if (controls.showMockup && mockupImage) {
+      const rect = mockupBodyRect(controls.outW, controls.outH, controls);
+      const lw = Math.max(64, Math.round(rect.labelW));
+      const lh = Math.max(64, Math.round(rect.labelH));
+      const labelImage = warpToImageData(sourceData, controls, lw, lh);
+      paintMockup(ctx, controls.outW, controls.outH, labelImage, controls);
+    } else {
+      const image = warpToImageData(sourceData, controls, controls.outW, controls.outH);
+      ctx.putImageData(image, 0, 0);
+    }
 
     const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
     if (!blob) throw new Error("PNG export failed");
-    downloadBlob(blob, `${exportBaseName()}-cylinder-${exportStamp()}.png`);
+    const suffix = controls.showMockup ? "mockup" : "cylinder";
+    downloadBlob(blob, `${exportBaseName()}-${suffix}-${exportStamp()}.png`);
     setStatus(`Exported ${controls.outW}×${controls.outH} PNG`);
   } catch (err) {
     console.error(err);
@@ -1523,6 +1664,7 @@ function resetControls() {
   els.crop.value = DEFAULTS.crop;
   els.clipCylinder.checked = DEFAULTS.clipCylinder;
   els.showGuides.checked = DEFAULTS.showGuides;
+  els.showMockup.checked = DEFAULTS.showMockup;
   els.matchAspect.checked = DEFAULTS.matchAspect;
   els.outW.value = DEFAULTS.outW;
   els.outH.value = DEFAULTS.outH;
@@ -1536,10 +1678,16 @@ function fitOutputToSource() {
   if (!sourceCanvas) return;
   const controls = readControls();
   if (controls.matchAspect) {
-    const g = bottleGeometry(controls);
     const h = Math.min(2400, Math.max(400, Math.round(sourceCanvas.height)));
     els.outH.value = h;
-    els.outW.value = Math.max(64, Math.round(h * (g.width / g.labelHeight)));
+    let aspect;
+    if (controls.showMockup && mockupImage) {
+      aspect = mockupImage.naturalWidth / mockupImage.naturalHeight;
+    } else {
+      const g = bottleGeometry(controls);
+      aspect = g.width / g.labelHeight;
+    }
+    els.outW.value = Math.max(64, Math.round(h * aspect));
   } else {
     const maxW = 2400;
     const scale = Math.min(1, maxW / sourceCanvas.width);
@@ -1583,6 +1731,7 @@ function bindUi() {
     els.crop,
     els.clipCylinder,
     els.showGuides,
+    els.showMockup,
     els.matchAspect,
     els.outW,
     els.outH,
@@ -1610,5 +1759,8 @@ function bindUi() {
   scheduleRender();
 }
 
-bindUi();
-setStatus("Upload a PDF or SVG to begin");
+loadMockup().then(() => {
+  bindUi();
+  setStatus("Upload a PDF or SVG — it will wrap onto the bottle mockup");
+  scheduleRender();
+});
