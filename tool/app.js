@@ -619,11 +619,21 @@ function hexToRgb(hex) {
  */
 function styleArtworkSample(rgba, controls) {
   if (!controls.knockoutWhite) return rgba;
-  const lum = 0.299 * rgba[0] + 0.587 * rgba[1] + 0.114 * rgba[2];
-  // White → 0 ink, black → full ink
-  let ink = 1 - lum / 255;
-  // Crush near-white so paper fully disappears
-  ink = Math.max(0, (ink - 0.04) / 0.96);
+  const lum = (0.299 * rgba[0] + 0.587 * rgba[1] + 0.114 * rgba[2]) / 255;
+  // Also treat near-neutral light fills as paper (PDF “white” is often ~240–250 gray)
+  const minC = Math.min(rgba[0], rgba[1], rgba[2]) / 255;
+  const paper = Math.max(lum, minC);
+
+  // Full ink below ~55% luminance; fully transparent above ~90%
+  const paperStart = 0.55;
+  const paperEnd = 0.9;
+  let ink;
+  if (paper >= paperEnd) ink = 0;
+  else if (paper <= paperStart) ink = 1;
+  else ink = 1 - (paper - paperStart) / (paperEnd - paperStart);
+  // Quadratic falloff clears anti-aliased paper fringes without a milky veil
+  ink = ink * ink;
+
   const [cr, cg, cb] = hexToRgb(controls.artColor);
   return [cr, cg, cb, rgba[3] * ink];
 }
@@ -804,8 +814,12 @@ function paintMockup(ctx, width, height, labelImage, controls) {
   tmp.getContext("2d").putImageData(labelImage, 0, 0);
 
   ctx.save();
-  // Ink-only artwork on the body, then restore glass speculars
+  // Multiply: residual paper can't lighten the glass; ink darkens the body
+  if (controls.knockoutWhite) {
+    ctx.globalCompositeOperation = "multiply";
+  }
   ctx.drawImage(tmp, rect.lx, rect.ly, rect.labelW, rect.labelH);
+  ctx.globalCompositeOperation = "source-over";
 
   if (mockupHighlights) {
     ctx.globalCompositeOperation = "screen";
@@ -1730,7 +1744,8 @@ function isNearWhiteCss(css) {
   const rgb = parseCssRgb(css);
   if (!rgb) return false;
   const lum = (0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]) / 255;
-  return lum > 0.92;
+  const minC = Math.min(rgb[0], rgb[1], rgb[2]) / 255;
+  return Math.max(lum, minC) > 0.9;
 }
 
 /** Knock out paper white and recolor remaining ink for vector export. */
