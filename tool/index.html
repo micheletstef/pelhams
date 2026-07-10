@@ -26,8 +26,9 @@
         <fieldset>
           <legend>Bottle</legend>
           <p>
-            <label>Diameter <input id="diameter" type="number" min="10" max="500" value="70" step="0.1" size="6" /></label>
-            <span id="diameter-unit">mm</span>
+            <label>Width <input id="bottle-width" type="number" min="10" max="500" value="70" step="0.1" size="6" /></label>
+            <span>mm</span>
+            <small>(front-view width = diameter)</small>
           </p>
           <p>
             <label>Height <input id="bottle-height" type="number" min="10" max="1000" value="220" step="0.1" size="6" /></label>
@@ -152,11 +153,18 @@
           <div class="viewport" id="viewport">
             <canvas id="preview" width="1400" height="2000"></canvas>
           </div>
-          <aside class="topview-panel">
-            <h2>Top view</h2>
-            <canvas id="topview" width="280" height="280"></canvas>
-            <p id="topview-stats" class="stats"></p>
-            <p class="hint">Circle = bottle · thick arc = label · dashed chord = front view</p>
+          <aside class="views-panel">
+            <section class="view-block">
+              <h2>Front view</h2>
+              <canvas id="frontview" width="200" height="320"></canvas>
+              <p id="frontview-stats" class="stats"></p>
+            </section>
+            <section class="view-block">
+              <h2>Top view</h2>
+              <canvas id="topview" width="280" height="280"></canvas>
+              <p id="topview-stats" class="stats"></p>
+              <p class="hint">Circle = bottle · thick arc = label · dashed chord = front</p>
+            </section>
           </aside>
         </div>
       </main>

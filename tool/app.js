@@ -10,7 +10,7 @@ const els = {
   fileLabel: $("file-label"),
   pdfPage: $("pdf-page"),
   sourceDpi: $("source-dpi"),
-  diameter: $("diameter"),
+  diameter: $("bottle-width"),
   bottleHeight: $("bottle-height"),
   bottleStats: $("bottle-stats"),
   labelWidth: $("label-width"),
@@ -46,6 +46,8 @@ const els = {
   preview: $("preview"),
   topview: $("topview"),
   topviewStats: $("topview-stats"),
+  frontview: $("frontview"),
+  frontviewStats: $("frontview-stats"),
   curvatureVal: $("curvature-val"),
   edgeWarpVal: $("edge-warp-val"),
   vBowVal: $("v-bow-val"),
@@ -61,7 +63,7 @@ const els = {
 };
 
 const DEFAULTS = {
-  diameter: 70,
+  diameter: 70, // bottle width (mm) — circular cross-section
   bottleHeight: 220,
   labelWidth: 120,
   labelHeight: 160,
@@ -108,6 +110,7 @@ let rafPending = 0;
 
 const previewCtx = els.preview.getContext("2d", { alpha: true });
 const topviewCtx = els.topview.getContext("2d");
+const frontviewCtx = els.frontview.getContext("2d");
 
 function setStatus(msg) {
   els.status.textContent = msg;
@@ -115,18 +118,22 @@ function setStatus(msg) {
 
 /** Physical bottle + label geometry derived from mm inputs. */
 function bottleGeometry(controls) {
+  // Width is the front-view width; for a round bottle this is also the diameter.
   const diameter = Math.max(1, controls.diameter);
   const radius = diameter / 2;
   const circumference = Math.PI * diameter;
   const bottleHeight = Math.max(1, controls.bottleHeight);
   const labelWidth = Math.max(0.1, controls.labelWidth);
   const labelHeight = Math.max(0.1, controls.labelHeight);
-  // Arc the label covers on the cylinder (radians / degrees)
-  const labelArcRad = labelWidth / radius; // s = Rθ ⇒ θ = s/R
+  const labelArcRad = labelWidth / radius;
   const labelArcDeg = (labelArcRad * 180) / Math.PI;
-  const coverage = labelWidth / circumference; // fraction of full wrap
+  const coverage = labelWidth / circumference;
+  // Visible front chord of the label (orthographic), capped by bottle width
+  const halfArc = Math.min(Math.PI / 2, labelArcRad / 2);
+  const visibleLabelWidth = 2 * radius * Math.sin(halfArc);
   return {
     diameter,
+    width: diameter,
     radius,
     circumference,
     bottleHeight,
@@ -135,6 +142,7 @@ function bottleGeometry(controls) {
     labelArcRad,
     labelArcDeg,
     coverage,
+    visibleLabelWidth,
   };
 }
 
@@ -183,7 +191,8 @@ function updateLabels() {
   els.fadeStartVal.textContent = `${Math.round(c.fadeStart * 100)}%`;
   els.cropVal.textContent = `${(c.crop * 100).toFixed(1)}%`;
   els.bgColor.disabled = c.bgMode !== "solid";
-  els.bottleStats.textContent = `Circumference ${g.circumference.toFixed(1)} mm · radius ${g.radius.toFixed(1)} mm`;
+  els.bottleStats.textContent =
+    `Width ${g.width.toFixed(1)} × height ${g.bottleHeight.toFixed(1)} mm · circumference ${g.circumference.toFixed(1)} mm`;
   els.labelArcReadout.textContent = `→ ${g.labelArcDeg.toFixed(1)}° around bottle (${(g.coverage * 100).toFixed(0)}% of circumference)`;
 }
 
@@ -400,6 +409,7 @@ function scheduleRender() {
   const controls = readControls();
   syncOutputAspect(controls);
   drawTopView(readControls());
+  drawFrontView(readControls());
   if (rafPending) cancelAnimationFrame(rafPending);
   rafPending = requestAnimationFrame(() => {
     rafPending = 0;
@@ -598,24 +608,142 @@ function drawTopView(controls) {
   ctx.lineTo(cx + r, dimY + 4);
   ctx.stroke();
   ctx.font = "11px system-ui, sans-serif";
-  ctx.fillText(`Ø ${g.diameter} mm`, cx, dimY - 6);
+  ctx.fillText(`W ${g.width} mm`, cx, dimY - 6);
 
   els.topviewStats.innerHTML =
     `Label arc <b>${g.labelArcDeg.toFixed(1)}°</b><br>` +
     `Wraps <b>${(g.coverage * 100).toFixed(0)}%</b> of circumference<br>` +
-    `Visible width = diameter <b>${g.diameter} mm</b><br>` +
+    `Bottle width <b>${g.width} mm</b><br>` +
     `Label <b>${g.labelWidth}×${g.labelHeight} mm</b>`;
+}
+
+/** Front elevation of the bottle with label band. */
+function drawFrontView(controls) {
+  const canvas = els.frontview;
+  const ctx = frontviewCtx;
+  const w = canvas.width;
+  const h = canvas.height;
+  const g = bottleGeometry(controls);
+
+  ctx.clearRect(0, 0, w, h);
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(0, 0, w, h);
+
+  const pad = 28;
+  const availW = w - pad * 2;
+  const availH = h - pad * 2 - 24;
+  const scale = Math.min(availW / g.width, availH / g.bottleHeight);
+  const bw = g.width * scale;
+  const bh = g.bottleHeight * scale;
+  const bx = (w - bw) / 2;
+  const by = pad + 8;
+
+  // Bottle body (cylinder silhouette)
+  ctx.fillStyle = "#f0f0f0";
+  ctx.strokeStyle = "#000";
+  ctx.lineWidth = 1.5;
+  // Side curves suggest round bottle
+  const sideR = Math.min(bw * 0.08, 10);
+  ctx.beginPath();
+  ctx.moveTo(bx + sideR, by);
+  ctx.lineTo(bx + bw - sideR, by);
+  ctx.quadraticCurveTo(bx + bw, by, bx + bw, by + sideR);
+  ctx.lineTo(bx + bw, by + bh - sideR);
+  ctx.quadraticCurveTo(bx + bw, by + bh, bx + bw - sideR, by + bh);
+  ctx.lineTo(bx + sideR, by + bh);
+  ctx.quadraticCurveTo(bx, by + bh, bx, by + bh - sideR);
+  ctx.lineTo(bx, by + sideR);
+  ctx.quadraticCurveTo(bx, by, bx + sideR, by);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+
+  // Vertical center line
+  ctx.setLineDash([3, 3]);
+  ctx.strokeStyle = "#bbb";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(bx + bw / 2, by);
+  ctx.lineTo(bx + bw / 2, by + bh);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Label band (height + vertical offset)
+  const lh = Math.min(bh, g.labelHeight * scale * controls.scaleY);
+  const cy = by + bh / 2 + controls.offsetY * bh;
+  let ly = cy - lh / 2;
+  ly = Math.max(by, Math.min(by + bh - lh, ly));
+
+  // Visible label width on front (foreshortened chord), centered with offset X
+  const visW = Math.min(bw, g.visibleLabelWidth * scale);
+  let lx = bx + (bw - visW) / 2 + controls.offsetX * bw;
+  lx = Math.max(bx, Math.min(bx + bw - visW, lx));
+
+  ctx.fillStyle = "rgba(0,0,0,0.08)";
+  ctx.strokeStyle = "#000";
+  ctx.lineWidth = 1.5;
+  // Slight bow on top/bottom if horiz curve
+  const bow = controls.hCurve * (visW * 0.08);
+  ctx.beginPath();
+  ctx.moveTo(lx, ly + bow);
+  ctx.quadraticCurveTo(lx + visW / 2, ly - bow, lx + visW, ly + bow);
+  ctx.lineTo(lx + visW, ly + lh - bow);
+  ctx.quadraticCurveTo(lx + visW / 2, ly + lh + bow, lx, ly + lh - bow);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.fillStyle = "#000";
+  ctx.font = "10px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.fillText("label", lx + visW / 2, ly + lh / 2 + 3);
+
+  // Width dimension
+  ctx.strokeStyle = "#000";
+  ctx.lineWidth = 1;
+  const dimY = by + bh + 14;
+  ctx.beginPath();
+  ctx.moveTo(bx, dimY);
+  ctx.lineTo(bx + bw, dimY);
+  ctx.moveTo(bx, dimY - 3);
+  ctx.lineTo(bx, dimY + 3);
+  ctx.moveTo(bx + bw, dimY - 3);
+  ctx.lineTo(bx + bw, dimY + 3);
+  ctx.stroke();
+  ctx.font = "11px system-ui, sans-serif";
+  ctx.fillText(`${g.width} mm`, bx + bw / 2, dimY + 14);
+
+  // Height dimension
+  const dimX = bx + bw + 12;
+  ctx.beginPath();
+  ctx.moveTo(dimX, by);
+  ctx.lineTo(dimX, by + bh);
+  ctx.moveTo(dimX - 3, by);
+  ctx.lineTo(dimX + 3, by);
+  ctx.moveTo(dimX - 3, by + bh);
+  ctx.lineTo(dimX + 3, by + bh);
+  ctx.stroke();
+  ctx.save();
+  ctx.translate(dimX + 12, by + bh / 2);
+  ctx.rotate(-Math.PI / 2);
+  ctx.fillText(`${g.bottleHeight} mm`, 0, 0);
+  ctx.restore();
+
+  els.frontviewStats.innerHTML =
+    `Bottle <b>${g.width} × ${g.bottleHeight} mm</b><br>` +
+    `Label band <b>${g.labelHeight} mm</b> tall<br>` +
+    `Visible label width ≈ <b>${g.visibleLabelWidth.toFixed(1)} mm</b>`;
 }
 
 function syncOutputAspect(controls) {
   if (!controls.matchAspect) return;
   const g = bottleGeometry(controls);
-  // Front view aspect ≈ diameter : label height
-  const aspect = g.diameter / g.labelHeight;
+  // Front view aspect ≈ bottle width : label height
+  const aspect = g.width / g.labelHeight;
   const h = controls.outH;
-  const w = Math.max(64, Math.round(h * aspect));
-  if (Number(els.outW.value) !== w) {
-    els.outW.value = String(w);
+  const outW = Math.max(64, Math.round(h * aspect));
+  if (Number(els.outW.value) !== outW) {
+    els.outW.value = String(outW);
   }
 }
 
@@ -1468,7 +1596,7 @@ function fitOutputToSource() {
     const g = bottleGeometry(controls);
     const h = Math.min(2400, Math.max(400, Math.round(sourceCanvas.height)));
     els.outH.value = h;
-    els.outW.value = Math.max(64, Math.round(h * (g.diameter / g.labelHeight)));
+    els.outW.value = Math.max(64, Math.round(h * (g.width / g.labelHeight)));
   } else {
     const maxW = 2400;
     const scale = Math.min(1, maxW / sourceCanvas.width);

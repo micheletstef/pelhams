@@ -123,25 +123,37 @@ input[type="number"] {
   background: #fff;
 }
 
-.topview-panel {
+.topview-panel,
+.views-panel {
   padding: 16px;
   overflow: auto;
   background: #fafafa;
 }
 
+.view-block {
+  margin-bottom: 20px;
+}
+
+.views-panel h2,
 .topview-panel h2 {
   margin: 0 0 12px;
   font-size: 13px;
   font-weight: bold;
 }
 
-#topview {
+#topview,
+#frontview {
   display: block;
   width: 100%;
   max-width: 280px;
   height: auto;
   border: 1px solid #999;
   background: #fff;
+}
+
+#frontview {
+  max-width: 200px;
+  margin: 0 auto;
 }
 
 @media (max-width: 900px) {
