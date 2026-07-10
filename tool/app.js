@@ -1868,19 +1868,44 @@ function loadScriptOnce(id, src) {
   });
 }
 
+/** Flat artwork SVG with embedded PNG when the source has no outline paths. */
+function buildIsolatedArtworkSvgFromRaster(controls) {
+  const canvas = renderIsolatedArtworkCanvas(controls);
+  const page = sourceArtboardSizePt(controls);
+  const dataUrl = canvas.toDataURL("image/png");
+  return [
+    `<?xml version="1.0" encoding="UTF-8"?>`,
+    `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${fmt(page.w)}" height="${fmt(page.h)}" viewBox="0 0 ${fmt(page.w)} ${fmt(page.h)}">`,
+    `<image width="${fmt(page.w)}" height="${fmt(page.h)}" href="${dataUrl}" xlink:href="${dataUrl}"/>`,
+    `</svg>`,
+  ].join("");
+}
+
 async function exportSvg() {
   if (!sourceData) return;
   const controls = readControls();
-  setStatus("Exporting vector SVG…");
+  setStatus("Exporting artwork SVG…");
   setExportBusy(true);
   await new Promise((r) => setTimeout(r, 20));
   try {
-    const svgText = await exportWarpedSvg(controls);
+    let svgText;
+    let mode = "vector";
+    try {
+      svgText = await exportIsolatedArtworkSvg(controls);
+    } catch (vecErr) {
+      console.warn("Vector SVG unavailable, embedding artboard raster:", vecErr);
+      setStatus("Source has no outline paths — embedding artboard image in SVG…");
+      svgText = buildIsolatedArtworkSvgFromRaster(controls);
+      mode = "raster";
+    }
+    const page = sourceArtboardSizePt(controls);
     downloadBlob(
       new Blob([svgText], { type: "image/svg+xml" }),
-      `${exportBaseName()}-cylinder-${exportStamp()}.svg`,
+      `${exportBaseName()}-artwork-${exportStamp()}.svg`,
     );
-    setStatus(`Exported vector SVG (${(svgText.length / 1024).toFixed(0)} KB)`);
+    setStatus(
+      `Exported artwork SVG ${(page.w / 72 * 25.4).toFixed(1)}×${(page.h / 72 * 25.4).toFixed(1)} mm (${(svgText.length / 1024).toFixed(0)} KB · ${mode})`,
+    );
   } catch (err) {
     console.error(err);
     setStatus(err?.message || "SVG export failed");
