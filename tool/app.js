@@ -109,8 +109,6 @@ let renderToken = 0;
 let rafPending = 0;
 
 const previewCtx = els.preview.getContext("2d", { alpha: true });
-const topviewCtx = els.topview.getContext("2d");
-const frontviewCtx = els.frontview.getContext("2d");
 
 function setStatus(msg) {
   els.status.textContent = msg;
@@ -423,8 +421,8 @@ function renderPreview() {
   const controls = readControls();
   const token = ++renderToken;
 
-  // Preview at a capped resolution for snappy interaction
-  const maxPreview = 900;
+  // High-res preview: match output size (cap only for very large exports)
+  const maxPreview = 4000;
   const scale = Math.min(1, maxPreview / Math.max(controls.outW, controls.outH));
   const w = Math.max(64, Math.round(controls.outW * scale));
   const h = Math.max(64, Math.round(controls.outH * scale));
@@ -506,109 +504,69 @@ function sourceUVToOutputXY(u, v, controls, outW, outH) {
   return { x, y, nx, fade: edgeFadeAlpha(nx, controls.edgeFade, controls.fadeStart) };
 }
 
-/** Draw top-down bottle diagram: circle + label arc + front chord. */
+function polar(cx, cy, r, canvasAng) {
+  return {
+    x: cx + Math.cos(canvasAng) * r,
+    y: cy + Math.sin(canvasAng) * r,
+  };
+}
+
+function svgArcPath(cx, cy, r, startAng, endAng) {
+  // SVG arc from startAng to endAng (canvas convention: 0 = right, CW positive like canvas)
+  // Convert to SVG: same math with large-arc / sweep
+  let delta = endAng - startAng;
+  while (delta < 0) delta += Math.PI * 2;
+  while (delta > Math.PI * 2) delta -= Math.PI * 2;
+  const large = delta > Math.PI ? 1 : 0;
+  const sweep = 1; // clockwise in screen coords
+  const s = polar(cx, cy, r, startAng);
+  const e = polar(cx, cy, r, endAng);
+  return `M ${s.x.toFixed(2)} ${s.y.toFixed(2)} A ${r} ${r} 0 ${large} ${sweep} ${e.x.toFixed(2)} ${e.y.toFixed(2)}`;
+}
+
+/** Draw top-down bottle diagram as SVG DOM. */
 function drawTopView(controls) {
-  const canvas = els.topview;
-  const ctx = topviewCtx;
-  const w = canvas.width;
-  const h = canvas.height;
   const g = bottleGeometry(controls);
-
-  ctx.clearRect(0, 0, w, h);
-  ctx.fillStyle = "#fff";
-  ctx.fillRect(0, 0, w, h);
-
+  const w = 280;
+  const h = 300;
   const cx = w / 2;
-  const cy = h / 2;
-  const r = Math.min(w, h) * 0.36;
+  const cy = h / 2 - 8;
+  const r = Math.min(w, h) * 0.34;
 
-  // Bottle body
-  ctx.beginPath();
-  ctx.arc(cx, cy, r, 0, Math.PI * 2);
-  ctx.fillStyle = "#f0f0f0";
-  ctx.fill();
-  ctx.strokeStyle = "#000";
-  ctx.lineWidth = 1.5;
-  ctx.stroke();
-
-  // Front = bottom of diagram. World angle 0 at front (down), positive CCW in bottle space.
-  // Canvas angle: 0 = right, CW positive in arc()... use: canvasAng = π/2 + worldAng
   const rot = (controls.rotateDeg * Math.PI) / 180;
   const half = g.labelArcRad / 2;
   const startWorld = -half + rot;
   const endWorld = half + rot;
   const toCanvas = (worldAng) => Math.PI / 2 + worldAng;
+  const startA = toCanvas(startWorld);
+  const endA = toCanvas(endWorld);
+  const strokeW = Math.max(6, r * 0.12);
 
-  // Label arc (thick)
-  ctx.beginPath();
-  ctx.arc(cx, cy, r, toCanvas(startWorld), toCanvas(endWorld), false);
-  ctx.strokeStyle = "#000";
-  ctx.lineWidth = Math.max(6, r * 0.12);
-  ctx.lineCap = "butt";
-  ctx.stroke();
-
-  // Label edge ticks
   const tick = (worldAng) => {
     const a = toCanvas(worldAng);
-    const x0 = cx + Math.cos(a) * (r - 8);
-    const y0 = cy + Math.sin(a) * (r - 8);
-    const x1 = cx + Math.cos(a) * (r + 10);
-    const y1 = cy + Math.sin(a) * (r + 10);
-    ctx.beginPath();
-    ctx.moveTo(x0, y0);
-    ctx.lineTo(x1, y1);
-    ctx.stroke();
+    const i = polar(cx, cy, r - 8, a);
+    const o = polar(cx, cy, r + 10, a);
+    return `<line x1="${i.x.toFixed(1)}" y1="${i.y.toFixed(1)}" x2="${o.x.toFixed(1)}" y2="${o.y.toFixed(1)}" stroke="#000" stroke-width="1.5"/>`;
   };
-  ctx.lineWidth = 1.5;
-  tick(startWorld);
-  tick(endWorld);
 
-  // Visible front chord (silhouette left–right)
-  ctx.setLineDash([4, 3]);
-  ctx.strokeStyle = "#666";
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(cx - r, cy);
-  ctx.lineTo(cx + r, cy);
-  ctx.stroke();
-  ctx.setLineDash([]);
-
-  // Camera / front marker at bottom
-  ctx.fillStyle = "#000";
-  ctx.beginPath();
-  ctx.moveTo(cx, cy + r + 18);
-  ctx.lineTo(cx - 7, cy + r + 6);
-  ctx.lineTo(cx + 7, cy + r + 6);
-  ctx.closePath();
-  ctx.fill();
-  ctx.font = "11px system-ui, sans-serif";
-  ctx.textAlign = "center";
-  ctx.fillText("front", cx, cy + r + 32);
-
-  // Center cross
-  ctx.strokeStyle = "#999";
-  ctx.beginPath();
-  ctx.moveTo(cx - 5, cy);
-  ctx.lineTo(cx + 5, cy);
-  ctx.moveTo(cx, cy - 5);
-  ctx.lineTo(cx, cy + 5);
-  ctx.stroke();
-
-  // Diameter dimension line
-  ctx.strokeStyle = "#000";
-  ctx.fillStyle = "#000";
-  ctx.lineWidth = 1;
   const dimY = cy - r - 16;
-  ctx.beginPath();
-  ctx.moveTo(cx - r, dimY);
-  ctx.lineTo(cx + r, dimY);
-  ctx.moveTo(cx - r, dimY - 4);
-  ctx.lineTo(cx - r, dimY + 4);
-  ctx.moveTo(cx + r, dimY - 4);
-  ctx.lineTo(cx + r, dimY + 4);
-  ctx.stroke();
-  ctx.font = "11px system-ui, sans-serif";
-  ctx.fillText(`W ${g.width} mm`, cx, dimY - 6);
+
+  els.topview.innerHTML = `
+    <svg viewBox="0 0 ${w} ${h}" xmlns="http://www.w3.org/2000/svg" role="img">
+      <circle cx="${cx}" cy="${cy}" r="${r}" fill="#f0f0f0" stroke="#000" stroke-width="1.5"/>
+      <path d="${svgArcPath(cx, cy, r, startA, endA)}" fill="none" stroke="#000" stroke-width="${strokeW.toFixed(1)}" stroke-linecap="butt"/>
+      ${tick(startWorld)}
+      ${tick(endWorld)}
+      <line x1="${cx - r}" y1="${cy}" x2="${cx + r}" y2="${cy}" stroke="#666" stroke-width="1" stroke-dasharray="4 3"/>
+      <polygon points="${cx},${cy + r + 18} ${cx - 7},${cy + r + 6} ${cx + 7},${cy + r + 6}" fill="#000"/>
+      <text x="${cx}" y="${cy + r + 32}" text-anchor="middle" font-size="11" font-family="system-ui,sans-serif">front</text>
+      <line x1="${cx - 5}" y1="${cy}" x2="${cx + 5}" y2="${cy}" stroke="#999" stroke-width="1"/>
+      <line x1="${cx}" y1="${cy - 5}" x2="${cx}" y2="${cy + 5}" stroke="#999" stroke-width="1"/>
+      <line x1="${cx - r}" y1="${dimY}" x2="${cx + r}" y2="${dimY}" stroke="#000" stroke-width="1"/>
+      <line x1="${cx - r}" y1="${dimY - 4}" x2="${cx - r}" y2="${dimY + 4}" stroke="#000" stroke-width="1"/>
+      <line x1="${cx + r}" y1="${dimY - 4}" x2="${cx + r}" y2="${dimY + 4}" stroke="#000" stroke-width="1"/>
+      <text x="${cx}" y="${dimY - 6}" text-anchor="middle" font-size="11" font-family="system-ui,sans-serif">W ${g.width} mm</text>
+    </svg>`;
 
   els.topviewStats.innerHTML =
     `Label arc <b>${g.labelArcDeg.toFixed(1)}°</b><br>` +
@@ -617,18 +575,11 @@ function drawTopView(controls) {
     `Label <b>${g.labelWidth}×${g.labelHeight} mm</b>`;
 }
 
-/** Front elevation of the bottle with label band. */
+/** Front elevation of the bottle with label band as SVG DOM. */
 function drawFrontView(controls) {
-  const canvas = els.frontview;
-  const ctx = frontviewCtx;
-  const w = canvas.width;
-  const h = canvas.height;
   const g = bottleGeometry(controls);
-
-  ctx.clearRect(0, 0, w, h);
-  ctx.fillStyle = "#fff";
-  ctx.fillRect(0, 0, w, h);
-
+  const w = 220;
+  const h = 340;
   const pad = 28;
   const availW = w - pad * 2;
   const availH = h - pad * 2 - 24;
@@ -637,97 +588,54 @@ function drawFrontView(controls) {
   const bh = g.bottleHeight * scale;
   const bx = (w - bw) / 2;
   const by = pad + 8;
-
-  // Bottle body (cylinder silhouette)
-  ctx.fillStyle = "#f0f0f0";
-  ctx.strokeStyle = "#000";
-  ctx.lineWidth = 1.5;
-  // Side curves suggest round bottle
   const sideR = Math.min(bw * 0.08, 10);
-  ctx.beginPath();
-  ctx.moveTo(bx + sideR, by);
-  ctx.lineTo(bx + bw - sideR, by);
-  ctx.quadraticCurveTo(bx + bw, by, bx + bw, by + sideR);
-  ctx.lineTo(bx + bw, by + bh - sideR);
-  ctx.quadraticCurveTo(bx + bw, by + bh, bx + bw - sideR, by + bh);
-  ctx.lineTo(bx + sideR, by + bh);
-  ctx.quadraticCurveTo(bx, by + bh, bx, by + bh - sideR);
-  ctx.lineTo(bx, by + sideR);
-  ctx.quadraticCurveTo(bx, by, bx + sideR, by);
-  ctx.closePath();
-  ctx.fill();
-  ctx.stroke();
 
-  // Vertical center line
-  ctx.setLineDash([3, 3]);
-  ctx.strokeStyle = "#bbb";
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(bx + bw / 2, by);
-  ctx.lineTo(bx + bw / 2, by + bh);
-  ctx.stroke();
-  ctx.setLineDash([]);
+  const bottlePath =
+    `M ${bx + sideR} ${by}` +
+    ` L ${bx + bw - sideR} ${by}` +
+    ` Q ${bx + bw} ${by} ${bx + bw} ${by + sideR}` +
+    ` L ${bx + bw} ${by + bh - sideR}` +
+    ` Q ${bx + bw} ${by + bh} ${bx + bw - sideR} ${by + bh}` +
+    ` L ${bx + sideR} ${by + bh}` +
+    ` Q ${bx} ${by + bh} ${bx} ${by + bh - sideR}` +
+    ` L ${bx} ${by + sideR}` +
+    ` Q ${bx} ${by} ${bx + sideR} ${by} Z`;
 
-  // Label band (height + vertical offset)
   const lh = Math.min(bh, g.labelHeight * scale * controls.scaleY);
   const cy = by + bh / 2 + controls.offsetY * bh;
   let ly = cy - lh / 2;
   ly = Math.max(by, Math.min(by + bh - lh, ly));
 
-  // Visible label width on front (foreshortened chord), centered with offset X
   const visW = Math.min(bw, g.visibleLabelWidth * scale);
   let lx = bx + (bw - visW) / 2 + controls.offsetX * bw;
   lx = Math.max(bx, Math.min(bx + bw - visW, lx));
 
-  ctx.fillStyle = "rgba(0,0,0,0.08)";
-  ctx.strokeStyle = "#000";
-  ctx.lineWidth = 1.5;
-  // Slight bow on top/bottom if horiz curve
   const bow = controls.hCurve * (visW * 0.08);
-  ctx.beginPath();
-  ctx.moveTo(lx, ly + bow);
-  ctx.quadraticCurveTo(lx + visW / 2, ly - bow, lx + visW, ly + bow);
-  ctx.lineTo(lx + visW, ly + lh - bow);
-  ctx.quadraticCurveTo(lx + visW / 2, ly + lh + bow, lx, ly + lh - bow);
-  ctx.closePath();
-  ctx.fill();
-  ctx.stroke();
+  const labelPath =
+    `M ${lx} ${ly + bow}` +
+    ` Q ${lx + visW / 2} ${ly - bow} ${lx + visW} ${ly + bow}` +
+    ` L ${lx + visW} ${ly + lh - bow}` +
+    ` Q ${lx + visW / 2} ${ly + lh + bow} ${lx} ${ly + lh - bow} Z`;
 
-  ctx.fillStyle = "#000";
-  ctx.font = "10px system-ui, sans-serif";
-  ctx.textAlign = "center";
-  ctx.fillText("label", lx + visW / 2, ly + lh / 2 + 3);
-
-  // Width dimension
-  ctx.strokeStyle = "#000";
-  ctx.lineWidth = 1;
   const dimY = by + bh + 14;
-  ctx.beginPath();
-  ctx.moveTo(bx, dimY);
-  ctx.lineTo(bx + bw, dimY);
-  ctx.moveTo(bx, dimY - 3);
-  ctx.lineTo(bx, dimY + 3);
-  ctx.moveTo(bx + bw, dimY - 3);
-  ctx.lineTo(bx + bw, dimY + 3);
-  ctx.stroke();
-  ctx.font = "11px system-ui, sans-serif";
-  ctx.fillText(`${g.width} mm`, bx + bw / 2, dimY + 14);
-
-  // Height dimension
   const dimX = bx + bw + 12;
-  ctx.beginPath();
-  ctx.moveTo(dimX, by);
-  ctx.lineTo(dimX, by + bh);
-  ctx.moveTo(dimX - 3, by);
-  ctx.lineTo(dimX + 3, by);
-  ctx.moveTo(dimX - 3, by + bh);
-  ctx.lineTo(dimX + 3, by + bh);
-  ctx.stroke();
-  ctx.save();
-  ctx.translate(dimX + 12, by + bh / 2);
-  ctx.rotate(-Math.PI / 2);
-  ctx.fillText(`${g.bottleHeight} mm`, 0, 0);
-  ctx.restore();
+
+  els.frontview.innerHTML = `
+    <svg viewBox="0 0 ${w} ${h}" xmlns="http://www.w3.org/2000/svg" role="img">
+      <path d="${bottlePath}" fill="#f0f0f0" stroke="#000" stroke-width="1.5"/>
+      <line x1="${bx + bw / 2}" y1="${by}" x2="${bx + bw / 2}" y2="${by + bh}" stroke="#bbb" stroke-width="1" stroke-dasharray="3 3"/>
+      <path d="${labelPath}" fill="rgba(0,0,0,0.08)" stroke="#000" stroke-width="1.5"/>
+      <text x="${lx + visW / 2}" y="${ly + lh / 2 + 3}" text-anchor="middle" font-size="10" font-family="system-ui,sans-serif">label</text>
+      <line x1="${bx}" y1="${dimY}" x2="${bx + bw}" y2="${dimY}" stroke="#000" stroke-width="1"/>
+      <line x1="${bx}" y1="${dimY - 3}" x2="${bx}" y2="${dimY + 3}" stroke="#000" stroke-width="1"/>
+      <line x1="${bx + bw}" y1="${dimY - 3}" x2="${bx + bw}" y2="${dimY + 3}" stroke="#000" stroke-width="1"/>
+      <text x="${bx + bw / 2}" y="${dimY + 14}" text-anchor="middle" font-size="11" font-family="system-ui,sans-serif">${g.width} mm</text>
+      <line x1="${dimX}" y1="${by}" x2="${dimX}" y2="${by + bh}" stroke="#000" stroke-width="1"/>
+      <line x1="${dimX - 3}" y1="${by}" x2="${dimX + 3}" y2="${by}" stroke="#000" stroke-width="1"/>
+      <line x1="${dimX - 3}" y1="${by + bh}" x2="${dimX + 3}" y2="${by + bh}" stroke="#000" stroke-width="1"/>
+      <text x="${dimX + 12}" y="${by + bh / 2}" text-anchor="middle" font-size="11" font-family="system-ui,sans-serif"
+        transform="rotate(-90 ${dimX + 12} ${by + bh / 2})">${g.bottleHeight} mm</text>
+    </svg>`;
 
   els.frontviewStats.innerHTML =
     `Bottle <b>${g.width} × ${g.bottleHeight} mm</b><br>` +

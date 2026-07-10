@@ -42,7 +42,8 @@ legend {
   padding: 0 4px;
 }
 
-fieldset p {
+fieldset p,
+.bottle-controls p {
   margin: 6px 0;
 }
 
@@ -116,14 +117,14 @@ input[type="number"] {
 #preview {
   display: block;
   max-width: 100%;
-  max-height: 100%;
+  max-height: calc(100vh - 5rem);
   width: auto;
   height: auto;
   border: 1px solid #000;
   background: #fff;
+  image-rendering: auto;
 }
 
-.topview-panel,
 .views-panel {
   padding: 16px;
   overflow: auto;
@@ -131,29 +132,34 @@ input[type="number"] {
 }
 
 .view-block {
-  margin-bottom: 20px;
+  margin-bottom: 24px;
 }
 
-.views-panel h2,
-.topview-panel h2 {
-  margin: 0 0 12px;
+.views-panel h2 {
+  margin: 0 0 10px;
   font-size: 13px;
   font-weight: bold;
 }
 
-#topview,
-#frontview {
-  display: block;
+.diagram {
   width: 100%;
-  max-width: 280px;
-  height: auto;
+  max-width: 260px;
+  margin: 0 auto;
   border: 1px solid #999;
   background: #fff;
+  overflow: hidden;
 }
 
-#frontview {
-  max-width: 200px;
-  margin: 0 auto;
+.diagram svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.bottle-controls {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid #ddd;
 }
 
 @media (max-width: 900px) {

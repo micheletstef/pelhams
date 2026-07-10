@@ -24,20 +24,6 @@
         </fieldset>
 
         <fieldset>
-          <legend>Bottle</legend>
-          <p>
-            <label>Width <input id="bottle-width" type="number" min="10" max="500" value="70" step="0.1" size="6" /></label>
-            <span>mm</span>
-            <small>(front-view width = diameter)</small>
-          </p>
-          <p>
-            <label>Height <input id="bottle-height" type="number" min="10" max="1000" value="220" step="0.1" size="6" /></label>
-            <span>mm</span>
-          </p>
-          <p id="bottle-stats" class="stats"></p>
-        </fieldset>
-
-        <fieldset>
           <legend>Label</legend>
           <p>
             <label>Width <input id="label-width" type="number" min="5" max="2000" value="120" step="0.1" size="6" /></label>
@@ -156,12 +142,23 @@
           <aside class="views-panel">
             <section class="view-block">
               <h2>Front view</h2>
-              <canvas id="frontview" width="200" height="320"></canvas>
-              <p id="frontview-stats" class="stats"></p>
+              <div id="frontview" class="diagram" aria-label="Front view of bottle"></div>
+              <div class="bottle-controls">
+                <p>
+                  <label>Width <input id="bottle-width" type="number" min="10" max="500" value="70" step="0.1" size="6" /></label>
+                  <span>mm</span>
+                </p>
+                <p>
+                  <label>Height <input id="bottle-height" type="number" min="10" max="1000" value="220" step="0.1" size="6" /></label>
+                  <span>mm</span>
+                </p>
+                <p id="bottle-stats" class="stats"></p>
+                <p id="frontview-stats" class="stats"></p>
+              </div>
             </section>
             <section class="view-block">
               <h2>Top view</h2>
-              <canvas id="topview" width="280" height="280"></canvas>
+              <div id="topview" class="diagram" aria-label="Top view of bottle"></div>
               <p id="topview-stats" class="stats"></p>
               <p class="hint">Circle = bottle · thick arc = label · dashed chord = front</p>
             </section>
