@@ -823,10 +823,12 @@ function sampleSourceUV(nx, ny, controls) {
 
   const depth = cylinderDepth(nx);
   const perspScale = 1 + controls.perspective * (1 - depth);
-  // Vertical: label height relative to bottle; output frame = label height band
+  // Vertical: full artwork maps into the label band.
+  // Offset Y only positions that band on the bottle (mockupBodyRect) — do not
+  // shift UV here or the top/bottom of the art gets cropped.
   const v =
     0.5 +
-    (ny - 0.5 - controls.offsetY) / (controls.scaleY * perspScale) +
+    (ny - 0.5) / (controls.scaleY * perspScale) +
     horizontalCurveOffset(nx, controls.hCurve);
   return { u, v, theta };
 }
@@ -841,7 +843,7 @@ function sourceUVToOutputXY(u, v, controls, outW, outH) {
   const depth = cylinderDepth(nx);
   const perspScale = 1 + controls.perspective * (1 - depth);
   const hOff = horizontalCurveOffset(nx, controls.hCurve);
-  const ny = (v - 0.5 - hOff) * controls.scaleY * perspScale + 0.5 + controls.offsetY;
+  const ny = (v - 0.5 - hOff) * controls.scaleY * perspScale + 0.5;
 
   const usableHalf = Math.max(0.01, 1 - controls.crop);
   const x = ((nx * usableHalf + 1) / 2) * outW;
