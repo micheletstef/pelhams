@@ -757,7 +757,8 @@ function renderPreview() {
         const rect = mockupBodyRect(w, h, controls);
         const lw = Math.max(64, Math.round(rect.labelW));
         const lh = Math.max(64, Math.round(rect.labelH));
-        labelImage = warpToImageData(sourceData, controls, lw, lh);
+        // scaleY already sizes the band on the bottle — keep UV at 1 so art isn't cropped
+        labelImage = warpToImageData(sourceData, { ...controls, scaleY: 1 }, lw, lh);
       }
       if (token !== renderToken) return;
       paintMockup(previewCtx, w, h, labelImage, controls);
@@ -811,9 +812,11 @@ function exportBaseName() {
 }
 
 /**
- * Same source→output mapping as the pixel preview (for one X).
- * Uses physical bottle diameter + label width: θ = asin(x/R), u from label arc.
+ * Vertical safe pad inside the label band (fraction of band height).
+ * Keeps ascenders / letter tops off the hard top edge of the warp.
  */
+const ART_V_PAD = 0.03;
+
 function sampleSourceUV(nx, ny, controls) {
   const g = bottleGeometry(controls);
   const rotateRad = (controls.rotateDeg * Math.PI) / 180;
@@ -823,13 +826,18 @@ function sampleSourceUV(nx, ny, controls) {
 
   const depth = cylinderDepth(nx);
   const perspScale = 1 + controls.perspective * (1 - depth);
-  // Vertical: full artwork maps into the label band.
-  // Offset Y only positions that band on the bottle (mockupBodyRect) — do not
-  // shift UV here or the top/bottom of the art gets cropped.
-  const v =
-    0.5 +
-    (ny - 0.5) / (controls.scaleY * perspScale) +
-    horizontalCurveOffset(nx, controls.hCurve);
+  // Map label-band Y → normalized t (0 at top, 1 at bottom).
+  // Offset Y only positions the band on the bottle (mockupBodyRect), not UV.
+  const t = 0.5 + (ny - 0.5) / (controls.scaleY * perspScale);
+  // Inset artwork in the band so tops/bottoms aren't clipped at the edge.
+  const pad = ART_V_PAD;
+  const span = Math.max(0.2, 1 - 2 * pad);
+  const tArt = (t - pad) / span;
+  // Bend horizontal lines without pushing v outside the art at the top/bottom
+  // (curve strength falls to 0 at tArt 0 and 1).
+  const hOff = horizontalCurveOffset(nx, controls.hCurve);
+  const edgeGate = 4 * tArt * (1 - tArt); // 0 at ends, 1 at mid
+  const v = tArt + hOff * Math.max(0, edgeGate);
   return { u, v, theta };
 }
 
@@ -843,7 +851,16 @@ function sourceUVToOutputXY(u, v, controls, outW, outH) {
   const depth = cylinderDepth(nx);
   const perspScale = 1 + controls.perspective * (1 - depth);
   const hOff = horizontalCurveOffset(nx, controls.hCurve);
-  const ny = (v - 0.5 - hOff) * controls.scaleY * perspScale + 0.5;
+  // Invert v ≈ tArt + hOff*gate(tArt). Gate is small near ends; approximate:
+  let tArt = v;
+  for (let i = 0; i < 6; i++) {
+    const gate = 4 * tArt * (1 - tArt);
+    tArt = v - hOff * Math.max(0, gate);
+  }
+  const pad = ART_V_PAD;
+  const span = Math.max(0.2, 1 - 2 * pad);
+  const t = pad + tArt * span;
+  const ny = (t - 0.5) * controls.scaleY * perspScale + 0.5;
 
   const usableHalf = Math.max(0.01, 1 - controls.crop);
   const x = ((nx * usableHalf + 1) / 2) * outW;
@@ -1017,7 +1034,7 @@ async function exportPng() {
       const rect = mockupBodyRect(controls.outW, controls.outH, controls);
       const lw = Math.max(64, Math.round(rect.labelW));
       const lh = Math.max(64, Math.round(rect.labelH));
-      const labelImage = warpToImageData(sourceData, controls, lw, lh);
+      const labelImage = warpToImageData(sourceData, { ...controls, scaleY: 1 }, lw, lh);
       paintMockup(ctx, controls.outW, controls.outH, labelImage, controls);
     } else {
       const image = warpToImageData(sourceData, controls, controls.outW, controls.outH);
