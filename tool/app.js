@@ -1665,6 +1665,7 @@ function printInkColor(controls) {
 /**
  * Flat label artwork (no cylinder warp) sized to the label mm.
  * Source vectors map into viewBox; width/height in pt for reliable PDF embedding.
+ * Returns null when there is no ink after knockout (caller should raster-fallback).
  */
 function buildIsolatedArtworkSvg(pathSet, controls) {
   const { paths, w: srcW, h: srcH } = pathSet;
@@ -1702,12 +1703,68 @@ function buildIsolatedArtworkSvg(pathSet, controls) {
   }
   out.push(`</svg>`);
 
-  if (!count) {
-    throw new Error(
-      "No artwork paths to export (PDF may be text/images only, or only white fills). Outline text to paths, or turn off knock out white.",
-    );
-  }
+  if (!count) return null;
   return out.join("");
+}
+
+/** Apply knockout + print ink to a copy of source ImageData. */
+function renderIsolatedArtworkImageData(controls) {
+  if (!sourceData) throw new Error("No source artwork loaded");
+  const { width: sw, height: sh, data: src } = sourceData;
+  const out = new ImageData(sw, sh);
+  const dst = out.data;
+  const inkControls = { ...controls, artColor: printInkColor(controls) };
+  for (let i = 0; i < src.length; i += 4) {
+    const rgba = styleArtworkSample(
+      [src[i], src[i + 1], src[i + 2], src[i + 3]],
+      inkControls,
+    );
+    dst[i] = rgba[0];
+    dst[i + 1] = rgba[1];
+    dst[i + 2] = rgba[2];
+    dst[i + 3] = rgba[3];
+  }
+  return out;
+}
+
+/** High-res flat artwork canvas at label size (for PDF when source has no outline paths). */
+function renderIsolatedArtworkCanvas(controls, dpi = 300) {
+  const img = renderIsolatedArtworkImageData(controls);
+  const srcCanvas = document.createElement("canvas");
+  srcCanvas.width = img.width;
+  srcCanvas.height = img.height;
+  srcCanvas.getContext("2d").putImageData(img, 0, 0);
+
+  const wPx = Math.max(64, Math.round((controls.labelWidth / 25.4) * dpi));
+  const hPx = Math.max(64, Math.round((controls.labelHeight / 25.4) * dpi));
+  const canvas = document.createElement("canvas");
+  canvas.width = wPx;
+  canvas.height = hPx;
+  const ctx = canvas.getContext("2d");
+  ctx.clearRect(0, 0, wPx, hPx);
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+  ctx.drawImage(srcCanvas, 0, 0, wPx, hPx);
+  return canvas;
+}
+
+async function exportArtworkPdfFromRaster(controls) {
+  await loadScriptOnce(
+    "jspdf-umd",
+    "https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js",
+  );
+  const jsPDFCtor = window.jspdf?.jsPDF || window.jsPDF;
+  if (!jsPDFCtor) throw new Error("jsPDF failed to load");
+
+  const dpi = Math.max(150, Math.min(600, Number(els.sourceDpi.value) || 300));
+  const canvas = renderIsolatedArtworkCanvas(controls, dpi);
+  const pageW = controls.labelWidth * MM_TO_PT;
+  const pageH = controls.labelHeight * MM_TO_PT;
+  const doc = new jsPDFCtor({ unit: "pt", format: [pageW, pageH], compress: true });
+
+  const dataUrl = canvas.toDataURL("image/png");
+  doc.addImage(dataUrl, "PNG", 0, 0, pageW, pageH);
+  return { blob: doc.output("blob"), dpi };
 }
 
 async function getVectorPathSet() {
@@ -1732,7 +1789,11 @@ async function exportIsolatedArtworkSvg(controls) {
   const pathSet = await getVectorPathSet();
   setStatus(`Extracting ${pathSet.paths.length} vector paths…`);
   await new Promise((r) => setTimeout(r, 10));
-  return buildIsolatedArtworkSvg(pathSet, controls);
+  const svg = buildIsolatedArtworkSvg(pathSet, controls);
+  if (!svg) {
+    throw new Error("NO_VECTOR_INK");
+  }
+  return svg;
 }
 
 async function svgTextToPdfBlob(svgText, pageWpt, pageHpt) {
@@ -1828,18 +1889,29 @@ async function exportPdf() {
   await new Promise((r) => setTimeout(r, 20));
 
   try {
-    const svgText = await exportIsolatedArtworkSvg(controls);
-    setStatus("Writing PDF…");
     const pageW = controls.labelWidth * MM_TO_PT;
     const pageH = controls.labelHeight * MM_TO_PT;
-    const blob = await svgTextToPdfBlob(svgText, pageW, pageH);
-    if (!blob || blob.size < 200) {
-      throw new Error("PDF writer produced an empty file — try Export SVG, or outline text to paths in the source");
+    let blob = null;
+    let mode = "vector";
+
+    try {
+      const svgText = await exportIsolatedArtworkSvg(controls);
+      setStatus("Writing vector PDF…");
+      blob = await svgTextToPdfBlob(svgText, pageW, pageH);
+      if (!blob || blob.size < 200) throw new Error("empty vector pdf");
+    } catch (vecErr) {
+      // Source is likely live text / images — fall back to high-res flat artwork
+      console.warn("Vector artwork export unavailable, using raster:", vecErr);
+      setStatus("Source has no outline paths — exporting high-res artwork PDF…");
+      const raster = await exportArtworkPdfFromRaster(controls);
+      blob = raster.blob;
+      mode = `raster ${raster.dpi}dpi`;
     }
+
     downloadBlob(blob, `${exportBaseName()}-artwork-${exportStamp()}.pdf`);
-    const inkNote = isNearWhiteCss(controls.artColor) ? " · ink black (print)" : "";
+    const inkNote = isNearWhiteCss(controls.artColor) ? " · ink black" : "";
     setStatus(
-      `Exported artwork PDF ${controls.labelWidth}×${controls.labelHeight} mm (${(blob.size / 1024).toFixed(0)} KB)${inkNote}`,
+      `Exported artwork PDF ${controls.labelWidth}×${controls.labelHeight} mm (${(blob.size / 1024).toFixed(0)} KB · ${mode}${inkNote})`,
     );
   } catch (err) {
     console.error(err);
