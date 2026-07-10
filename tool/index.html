@@ -12,6 +12,20 @@
         <h1>Cylinder Wrap</h1>
 
         <fieldset>
+          <legend>Vessel</legend>
+          <p>
+            <label>
+              Container
+              <select id="vessel">
+                <option value="bottle75cl" selected>Rheinwein 75cl bottle</option>
+                <option value="can330">330 ml aluminum can</option>
+              </select>
+            </label>
+          </p>
+          <p id="bottle-stats" class="stats"></p>
+        </fieldset>
+
+        <fieldset>
           <legend>Source</legend>
           <p>
             <input id="file-input" type="file" accept=".pdf,.svg,application/pdf,image/svg+xml" />
@@ -37,7 +51,7 @@
           <p>
             <label>Rotate <input id="rotate" type="range" min="-180" max="180" value="0" step="0.1" /></label>
             <span id="rotate-val">0°</span>
-            <small>(spin around bottle)</small>
+            <small>(spin around vessel)</small>
           </p>
           <p>
             <label>Offset Y <input id="offset-y" type="range" min="-100" max="100" value="0" step="0.1" /></label>
@@ -105,10 +119,10 @@
             <label><input id="show-guides" type="checkbox" /> Show guides</label>
           </p>
           <p>
-            <label><input id="show-mockup" type="checkbox" checked /> Superimpose on bottle mockup</label>
+            <label><input id="show-mockup" type="checkbox" checked /> Superimpose on mockup</label>
           </p>
           <p>
-            <label><input id="match-aspect" type="checkbox" checked /> Match output to bottle aspect</label>
+            <label><input id="match-aspect" type="checkbox" checked /> Match output to vessel aspect</label>
           </p>
         </fieldset>
 
@@ -151,21 +165,20 @@
           <aside class="views-panel">
             <section class="view-block">
               <h2>Front view</h2>
-              <div id="frontview" class="diagram" aria-label="Front view of bottle"></div>
-              <p id="bottle-stats" class="stats"></p>
+              <div id="frontview" class="diagram" aria-label="Front view of vessel"></div>
               <p id="frontview-stats" class="stats"></p>
             </section>
             <section class="view-block">
               <h2>Top view</h2>
-              <div id="topview" class="diagram" aria-label="Top view of bottle"></div>
+              <div id="topview" class="diagram" aria-label="Top view of vessel"></div>
               <p id="topview-stats" class="stats"></p>
-              <p class="hint">Circle = bottle · thick arc = label · dashed chord = front</p>
+              <p class="hint">Circle = vessel · thick arc = label · dashed chord = front</p>
             </section>
           </aside>
         </div>
       </main>
     </div>
 
-    <script type="module" src="app.js?v=20260710-warped"></script>
+    <script type="module" src="app.js?v=20260710-can"></script>
   </body>
 </html>

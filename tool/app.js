@@ -10,6 +10,7 @@ const els = {
   fileLabel: $("file-label"),
   pdfPage: $("pdf-page"),
   sourceDpi: $("source-dpi"),
+  vessel: $("vessel"),
   bottleStats: $("bottle-stats"),
   labelWidth: $("label-width"),
   labelHeight: $("label-height"),
@@ -63,36 +64,78 @@ const els = {
   cropVal: $("crop-val"),
 };
 
-/** Fixed bottle: Univerre Rheinwein BVS30H60 75cl white 350mm (from tech drawing) */
-const BOTTLE = {
-  name: "Rheinwein BVS30H60 75cl",
-  diameter: 77.7, // body Ø mm
-  height: 349, // overall height mm
-  labelPanel: 105, // parallel body / label panel height mm
-  finishOd: 28.9,
-  neckOd: 25.5,
-  fillFromTop: 59.5,
-  // Front-view asset cropped from the Univerre PDF outline
-  frontSrc: "assets/rhine-bottle-front.png",
-  // Label panel as fraction of image height (from top)
-  bodyTopFrac: (349 - 12 - 105) / 349,
-  bodyBotFrac: (349 - 8) / 349,
+/**
+ * Selectable vessels. Each has physical mm dims + a photo mockup calibration.
+ * Can: standard EU 330 ml (Ø66.2 × 115.2 mm). Bottle: Univerre Rheinwein 75cl.
+ */
+const VESSELS = {
+  bottle75cl: {
+    id: "bottle75cl",
+    name: "Rheinwein BVS30H60 75cl",
+    kind: "bottle",
+    diameter: 77.7,
+    height: 349,
+    labelPanel: 105,
+    frontSrc: "assets/rhine-bottle-front.png",
+    frontNote: "Outline from Univerre PDF",
+    bodyTopFrac: (349 - 12 - 105) / 349,
+    bodyBotFrac: (349 - 8) / 349,
+    defaultLabelWidth: 120,
+    defaultLabelHeight: 105,
+    defaultOutW: 424,
+    defaultOutH: 2068,
+    mockup: {
+      src: "assets/bottle-mockup-hr.png",
+      // Calibrated from SM_CiderBottle_Cutout_HR.png (848×4136)
+      bodyTopFrac: 0.676,
+      bodyBotFrac: 0.977,
+      bodyLeftFrac: 0.01,
+      bodyRightFrac: 0.99,
+      highlightStrength: 0.4,
+      bgKnockoutLum: 14,
+    },
+  },
+  can330: {
+    id: "can330",
+    name: "330 ml aluminum can",
+    kind: "can",
+    diameter: 66.2,
+    height: 115.2,
+    // Parallel body band on SM_Aluminum_Can_HR.png
+    labelPanel: 91,
+    frontSrc: "assets/can-mockup-hr.png",
+    frontNote: "Standard 330 ml can mockup",
+    bodyTopFrac: 0.132,
+    bodyBotFrac: 0.924,
+    // Full wrap ≈ π × Ø
+    defaultLabelWidth: 208,
+    defaultLabelHeight: 91,
+    defaultOutW: 794,
+    defaultOutH: 1504,
+    mockup: {
+      src: "assets/can-mockup-hr.png",
+      bodyTopFrac: 0.132,
+      bodyBotFrac: 0.924,
+      bodyLeftFrac: 0.001,
+      bodyRightFrac: 0.997,
+      highlightStrength: 0.5,
+      bgKnockoutLum: 14,
+    },
+  },
 };
 
-/** Photo mockup (amber bottle cutout) — label composites onto the cylindrical body. */
-const MOCKUP = {
-  src: "assets/bottle-mockup-hr.png",
-  // Calibrated from SM_CiderBottle_Cutout_HR.png (848×4136)
-  bodyTopFrac: 0.676,
-  bodyBotFrac: 0.977,
-  bodyLeftFrac: 0.01,
-  bodyRightFrac: 0.99,
-  highlightStrength: 0.4,
-  // Only used when the asset has an opaque black studio backdrop
-  bgKnockoutLum: 14,
-};
+const DEFAULT_VESSEL_ID = "bottle75cl";
+
+function activeVessel() {
+  return VESSELS[els.vessel?.value] || VESSELS[DEFAULT_VESSEL_ID];
+}
+
+function activeMockup() {
+  return activeVessel().mockup;
+}
 
 const DEFAULTS = {
+  vessel: DEFAULT_VESSEL_ID,
   labelWidth: 120,
   labelHeight: 105,
   curvature: 1,
@@ -157,6 +200,7 @@ function mockupSize(img) {
 }
 
 function loadMockup() {
+  const mockup = activeMockup();
   return new Promise((resolve) => {
     const img = new Image();
     img.onload = () => {
@@ -166,11 +210,32 @@ function loadMockup() {
       resolve(mockupImage);
     };
     img.onerror = () => {
-      console.warn("Bottle mockup failed to load");
+      console.warn("Mockup failed to load:", mockup.src);
+      mockupImage = null;
+      mockupHighlights = null;
       resolve(null);
     };
-    img.src = MOCKUP.src;
+    img.src = mockup.src;
   });
+}
+
+/** Apply vessel-specific label size + output defaults (keeps warp knobs). */
+function applyVesselLabelDefaults(vessel = activeVessel()) {
+  els.labelWidth.value = String(vessel.defaultLabelWidth);
+  els.labelHeight.value = String(vessel.defaultLabelHeight);
+  els.outW.value = String(vessel.defaultOutW);
+  els.outH.value = String(vessel.defaultOutH);
+}
+
+async function switchVessel(vesselId, { applyLabelDefaults = true } = {}) {
+  if (!VESSELS[vesselId]) vesselId = DEFAULT_VESSEL_ID;
+  els.vessel.value = vesselId;
+  if (applyLabelDefaults) applyVesselLabelDefaults();
+  setStatus(`Loading ${activeVessel().name}…`);
+  await loadMockup();
+  saveSettings();
+  scheduleRender();
+  setStatus(`Ready — ${activeVessel().name}`);
 }
 
 function rasterizeImage(img) {
@@ -203,7 +268,7 @@ function cutoutBlackBackground(img) {
   const ctx = c.getContext("2d");
   const data = ctx.getImageData(0, 0, c.width, c.height);
   const d = data.data;
-  const lim = MOCKUP.bgKnockoutLum;
+  const lim = activeMockup().bgKnockoutLum;
   for (let i = 0; i < d.length; i += 4) {
     const r = d[i];
     const g = d[i + 1];
@@ -249,12 +314,13 @@ function setStatus(msg) {
   els.status.textContent = msg;
 }
 
-/** Physical bottle + label geometry derived from mm inputs. */
+/** Physical vessel + label geometry derived from mm inputs. */
 function bottleGeometry(controls) {
-  const diameter = BOTTLE.diameter;
+  const vessel = activeVessel();
+  const diameter = vessel.diameter;
   const radius = diameter / 2;
   const circumference = Math.PI * diameter;
-  const bottleHeight = BOTTLE.height;
+  const bottleHeight = vessel.height;
   const labelWidth = Math.max(0.1, controls.labelWidth);
   const labelHeight = Math.max(0.1, controls.labelHeight);
   const labelArcRad = labelWidth / radius;
@@ -280,6 +346,7 @@ function bottleGeometry(controls) {
 
 function collectSettings() {
   return {
+    vessel: els.vessel.value,
     labelWidth: els.labelWidth.value,
     labelHeight: els.labelHeight.value,
     curvature: els.curvature.value,
@@ -318,6 +385,7 @@ function applySettings(s) {
   const setCheck = (el, key) => {
     if (typeof s[key] === "boolean" && el) el.checked = s[key];
   };
+  if (s.vessel && VESSELS[s.vessel]) els.vessel.value = s.vessel;
   setVal(els.labelWidth, "labelWidth");
   setVal(els.labelHeight, "labelHeight");
   setVal(els.curvature, "curvature");
@@ -411,9 +479,10 @@ function updateLabels() {
   els.fadeStartVal.textContent = `${Math.round(c.fadeStart * 100)}%`;
   els.cropVal.textContent = `${(c.crop * 100).toFixed(1)}%`;
   els.bgColor.disabled = c.bgMode !== "solid";
+  const vessel = activeVessel();
   els.bottleStats.textContent =
-    `${BOTTLE.name} · Ø${BOTTLE.diameter} × ${BOTTLE.height} mm · circ. ${g.circumference.toFixed(1)} mm`;
-  els.labelArcReadout.textContent = `→ ${g.labelArcDeg.toFixed(1)}° around bottle (${(g.coverage * 100).toFixed(0)}% of circumference)`;
+    `${vessel.name} · Ø${vessel.diameter} × ${vessel.height} mm · circ. ${g.circumference.toFixed(1)} mm`;
+  els.labelArcReadout.textContent = `→ ${g.labelArcDeg.toFixed(1)}° around vessel (${(g.coverage * 100).toFixed(0)}% of circumference)`;
 }
 
 /**
@@ -644,17 +713,19 @@ function drawGuides(ctx, width, height, controls) {
 
 function mockupBodyRect(width, height, controls) {
   const g = bottleGeometry(controls);
-  const panelTop = height * MOCKUP.bodyTopFrac;
-  const panelBot = height * MOCKUP.bodyBotFrac;
+  const mockup = activeMockup();
+  const vessel = activeVessel();
+  const panelTop = height * mockup.bodyTopFrac;
+  const panelBot = height * mockup.bodyBotFrac;
   const panelH = Math.max(1, panelBot - panelTop);
-  const panelLeft = width * MOCKUP.bodyLeftFrac;
-  const panelRight = width * MOCKUP.bodyRightFrac;
+  const panelLeft = width * mockup.bodyLeftFrac;
+  const panelRight = width * mockup.bodyRightFrac;
   const panelW = Math.max(1, panelRight - panelLeft);
 
   // Label height as fraction of the physical label panel
   const labelH = Math.min(
     panelH * 1.15,
-    panelH * (g.labelHeight / BOTTLE.labelPanel) * controls.scaleY
+    panelH * (g.labelHeight / vessel.labelPanel) * controls.scaleY
   );
   const visFrac = Math.min(1, g.visibleLabelWidth / g.width);
   const labelW = Math.min(panelW, panelW * visFrac * controls.scaleX);
@@ -710,7 +781,7 @@ function paintMockup(ctx, width, height, labelImage, controls) {
 
   if (mockupHighlights) {
     ctx.globalCompositeOperation = "screen";
-    ctx.globalAlpha = MOCKUP.highlightStrength;
+    ctx.globalAlpha = activeMockup().highlightStrength;
     ctx.beginPath();
     ctx.rect(rect.lx, rect.ly, rect.labelW, rect.labelH);
     ctx.clip();
@@ -940,19 +1011,20 @@ function drawTopView(controls) {
   els.topviewStats.innerHTML =
     `Label arc <b>${g.labelArcDeg.toFixed(1)}°</b><br>` +
     `Wraps <b>${(g.coverage * 100).toFixed(0)}%</b> of circumference<br>` +
-    `Bottle width <b>${g.width} mm</b><br>` +
+    `Vessel width <b>${g.width} mm</b><br>` +
     `Label <b>${g.labelWidth}×${g.labelHeight} mm</b>`;
 }
 
-/** Front elevation: real Univerre PDF outline + label band overlay. */
+/** Front elevation: vessel outline + label band overlay. */
 function drawFrontView(controls) {
   const g = bottleGeometry(controls);
-  const H = BOTTLE.height;
-  const R = BOTTLE.diameter / 2;
+  const vessel = activeVessel();
+  const H = vessel.height;
+  const R = vessel.diameter / 2;
 
-  // Overlay uses a normalized 100×100 viewBox mapped to the bottle image
-  const bodyTop = BOTTLE.bodyTopFrac * 100;
-  const bodyBot = BOTTLE.bodyBotFrac * 100;
+  // Overlay uses a normalized 100×100 viewBox mapped to the vessel image
+  const bodyTop = vessel.bodyTopFrac * 100;
+  const bodyBot = vessel.bodyBotFrac * 100;
   const bodyH = bodyBot - bodyTop;
 
   const lhMm = Math.min(H * 0.9, g.labelHeight * controls.scaleY);
@@ -964,7 +1036,7 @@ function drawFrontView(controls) {
 
   const visFrac = Math.min(1, g.visibleLabelWidth / (R * 2));
   const halfVis = (visFrac * 100) / 2;
-  // Bottle body fills most of image width; inset slightly for stroke padding in crop
+  // Body fills most of image width; inset slightly for stroke padding in crop
   const inset = 4;
   const cx = 50 + controls.offsetX * 40;
   let lx = cx - halfVis;
@@ -981,7 +1053,7 @@ function drawFrontView(controls) {
 
   els.frontview.innerHTML = `
     <div class="bottle-diagram">
-      <img src="${BOTTLE.frontSrc}" alt="${BOTTLE.name} outline" draggable="false" />
+      <img src="${vessel.frontSrc}" alt="${vessel.name} outline" draggable="false" />
       <svg class="label-overlay" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
         <rect x="${inset}" y="${bodyTop.toFixed(2)}" width="${(100 - inset * 2).toFixed(2)}" height="${bodyH.toFixed(2)}"
           fill="none" stroke="#999" stroke-width="0.4" stroke-dasharray="1.5 1.5" vector-effect="non-scaling-stroke"/>
@@ -990,11 +1062,11 @@ function drawFrontView(controls) {
           font-size="4" font-family="system-ui,sans-serif" fill="#000">label</text>
       </svg>
     </div>
-    <p class="dim-readout">Ø ${BOTTLE.diameter} mm · ${BOTTLE.height} mm</p>`;
+    <p class="dim-readout">Ø ${vessel.diameter} mm · ${vessel.height} mm</p>`;
 
   els.frontviewStats.innerHTML =
-    `Outline from Univerre PDF<br>` +
-    `Label panel ≈ <b>${BOTTLE.labelPanel} mm</b> on body<br>` +
+    `${vessel.frontNote}<br>` +
+    `Label panel ≈ <b>${vessel.labelPanel} mm</b> on body<br>` +
     `Visible label width ≈ <b>${g.visibleLabelWidth.toFixed(1)} mm</b>`;
 }
 
@@ -2057,8 +2129,9 @@ async function reloadPdfPage() {
 }
 
 function resetControls() {
-  els.labelWidth.value = DEFAULTS.labelWidth;
-  els.labelHeight.value = DEFAULTS.labelHeight;
+  const vessel = activeVessel();
+  els.labelWidth.value = vessel.defaultLabelWidth;
+  els.labelHeight.value = vessel.defaultLabelHeight;
   els.curvature.value = DEFAULTS.curvature;
   els.edgeWarp.value = DEFAULTS.edgeWarp;
   els.vBow.value = DEFAULTS.vBow;
@@ -2077,8 +2150,8 @@ function resetControls() {
   els.matchAspect.checked = DEFAULTS.matchAspect;
   els.knockoutWhite.checked = DEFAULTS.knockoutWhite;
   els.artColor.value = DEFAULTS.artColor;
-  els.outW.value = DEFAULTS.outW;
-  els.outH.value = DEFAULTS.outH;
+  els.outW.value = vessel.defaultOutW;
+  els.outH.value = vessel.defaultOutH;
   els.bgMode.value = DEFAULTS.bgMode;
   els.bgColor.value = DEFAULTS.bgColor;
   els.pathDetail.value = DEFAULTS.pathDetail;
@@ -2113,8 +2186,6 @@ function fitOutputToSource() {
 }
 
 function bindUi() {
-  loadSettings();
-
   const onFile = (file) => ingestFile(file);
 
   els.fileInput.addEventListener("change", () => {
@@ -2135,6 +2206,10 @@ function bindUi() {
     saveSettings();
     scheduleRender();
   };
+
+  els.vessel.addEventListener("change", () => {
+    switchVessel(els.vessel.value, { applyLabelDefaults: true });
+  });
 
   const live = [
     els.labelWidth,
@@ -2193,8 +2268,9 @@ function bindUi() {
   scheduleRender();
 }
 
+loadSettings();
 loadMockup().then(() => {
   bindUi();
-  setStatus("Upload a PDF or SVG — it will wrap onto the bottle mockup");
+  setStatus(`Upload a PDF or SVG — it will wrap onto the ${activeVessel().kind} mockup`);
   scheduleRender();
 });
