@@ -449,13 +449,16 @@ function thetaToScreenX(theta, wrap, edgeSquash, labelArcRad) {
 }
 
 /**
- * Vertical offset for horizontal lines (elliptical arc).
+ * Vertical offset for horizontal lines (elliptical arc on the cylinder face).
+ * 0 at center, max at left/right edges. Magnitude is a fraction of label-band height
+ * and matches the front-view label overlay bow.
  */
 function horizontalCurveOffset(nx, hCurve) {
   if (!hCurve) return 0;
   const x = Math.max(-1, Math.min(1, nx));
   const cosTheta = Math.sqrt(Math.max(0, 1 - x * x));
-  return hCurve * 0.45 * (1 - cosTheta);
+  // ~0.18 of band height at the rim when hCurve = 1 (same visual weight as front view)
+  return hCurve * 0.18 * (1 - cosTheta);
 }
 
 function cylinderDepth(nx) {
@@ -817,27 +820,33 @@ function exportBaseName() {
  */
 const ART_V_PAD = 0.03;
 
+/**
+ * Map output (nx, ny) → source UV.
+ *
+ * Horiz. curve matches the front-view label bow:
+ *   ny = v*(1-2h) + h   where h = horizontalCurveOffset(nx)
+ * so top/bottom edges sit lower/higher at the sides (∩ top, ∪ bottom).
+ */
 function sampleSourceUV(nx, ny, controls) {
   const g = bottleGeometry(controls);
   const rotateRad = (controls.rotateDeg * Math.PI) / 180;
   const theta = screenXToTheta(nx, controls.wrap, controls.edgeSquash, g.labelArcRad);
   // Label centered at rotate=0 covers [-α/2, α/2]
-  let u = (theta - rotateRad) / (g.labelArcRad / controls.scaleX) + 0.5 + controls.offsetX;
+  const u = (theta - rotateRad) / (g.labelArcRad / controls.scaleX) + 0.5 + controls.offsetX;
 
   const depth = cylinderDepth(nx);
   const perspScale = 1 + controls.perspective * (1 - depth);
   // Map label-band Y → normalized t (0 at top, 1 at bottom).
   // Offset Y only positions the band on the bottle (mockupBodyRect), not UV.
   const t = 0.5 + (ny - 0.5) / (controls.scaleY * perspScale);
-  // Inset artwork in the band so tops/bottoms aren't clipped at the edge.
   const pad = ART_V_PAD;
   const span = Math.max(0.2, 1 - 2 * pad);
   const tArt = (t - pad) / span;
-  // Bend horizontal lines without pushing v outside the art at the top/bottom
-  // (curve strength falls to 0 at tArt 0 and 1).
-  const hOff = horizontalCurveOffset(nx, controls.hCurve);
-  const edgeGate = 4 * tArt * (1 - tArt); // 0 at ends, 1 at mid
-  const v = tArt + hOff * Math.max(0, edgeGate);
+
+  const h = Math.min(0.4, Math.max(0, horizontalCurveOffset(nx, controls.hCurve)));
+  const denom = Math.max(0.2, 1 - 2 * h);
+  // Invert ny = v*(1-2h)+h  →  v = (ny - h) / (1-2h)
+  const v = (tArt - h) / denom;
   return { u, v, theta };
 }
 
@@ -850,13 +859,9 @@ function sourceUVToOutputXY(u, v, controls, outW, outH) {
 
   const depth = cylinderDepth(nx);
   const perspScale = 1 + controls.perspective * (1 - depth);
-  const hOff = horizontalCurveOffset(nx, controls.hCurve);
-  // Invert v ≈ tArt + hOff*gate(tArt). Gate is small near ends; approximate:
-  let tArt = v;
-  for (let i = 0; i < 6; i++) {
-    const gate = 4 * tArt * (1 - tArt);
-    tArt = v - hOff * Math.max(0, gate);
-  }
+  const h = Math.min(0.4, Math.max(0, horizontalCurveOffset(nx, controls.hCurve)));
+  // ny_band = v*(1-2h) + h
+  const tArt = v * (1 - 2 * h) + h;
   const pad = ART_V_PAD;
   const span = Math.max(0.2, 1 - 2 * pad);
   const t = pad + tArt * span;
@@ -965,7 +970,8 @@ function drawFrontView(controls) {
   let lx = cx - halfVis;
   lx = Math.max(inset, Math.min(100 - inset - halfVis * 2, lx));
   const lx2 = lx + halfVis * 2;
-  const bow = controls.hCurve * halfVis * 0.12;
+  // Same bow model as the artwork warp (fraction of label height at the rim)
+  const bow = horizontalCurveOffset(1, controls.hCurve) * lh;
 
   const labelPath =
     `M ${lx.toFixed(2)} ${(ly + bow).toFixed(2)}` +
@@ -1628,10 +1634,10 @@ function isNearWhiteCss(css) {
 }
 
 /** Knock out paper white and recolor remaining ink for vector export. */
-function stylePathForArtworkExport(path, controls) {
+function stylePathForArtworkExport(path, controls, inkColor) {
   let fill = path.fill && path.fill !== "none" ? path.fill : "none";
   let stroke = path.stroke && path.stroke !== "none" ? path.stroke : "none";
-  const art = controls.artColor || "#000000";
+  const art = inkColor || controls.artColor || "#000000";
 
   if (controls.knockoutWhite) {
     if (fill !== "none" && isNearWhiteCss(fill)) fill = "none";
@@ -1644,24 +1650,37 @@ function stylePathForArtworkExport(path, controls) {
   return { ...path, fill, stroke };
 }
 
+/** Ink color for print PDF — light mockup colors become black so the file isn't blank. */
+function printInkColor(controls) {
+  const art = controls.artColor || "#000000";
+  if (isNearWhiteCss(art)) return "#000000";
+  const rgb = parseCssRgb(art);
+  if (rgb) {
+    const lum = (0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]) / 255;
+    if (lum > 0.85) return "#000000";
+  }
+  return art;
+}
+
 /**
  * Flat label artwork (no cylinder warp) sized to the label mm.
- * Source vectors map into viewBox; SVG declares physical mm for print.
+ * Source vectors map into viewBox; width/height in pt for reliable PDF embedding.
  */
 function buildIsolatedArtworkSvg(pathSet, controls) {
   const { paths, w: srcW, h: srcH } = pathSet;
-  const mmW = controls.labelWidth;
-  const mmH = controls.labelHeight;
+  const pageWpt = controls.labelWidth * MM_TO_PT;
+  const pageHpt = controls.labelHeight * MM_TO_PT;
+  const ink = printInkColor(controls);
 
   const out = [];
   out.push(`<?xml version="1.0" encoding="UTF-8"?>`);
   out.push(
-    `<svg xmlns="http://www.w3.org/2000/svg" width="${fmt(mmW)}mm" height="${fmt(mmH)}mm" viewBox="0 0 ${fmt(srcW)} ${fmt(srcH)}">`,
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${fmt(pageWpt)}" height="${fmt(pageHpt)}" viewBox="0 0 ${fmt(srcW)} ${fmt(srcH)}">`,
   );
 
   let count = 0;
   for (const src of paths) {
-    const p = stylePathForArtworkExport(src, controls);
+    const p = stylePathForArtworkExport(src, controls, ink);
     if (p.fill === "none" && p.stroke === "none") continue;
     count++;
     let attrs = `d="${p.d}"`;
@@ -1683,7 +1702,11 @@ function buildIsolatedArtworkSvg(pathSet, controls) {
   }
   out.push(`</svg>`);
 
-  if (!count) throw new Error("No artwork paths to export (try turning off knock out white)");
+  if (!count) {
+    throw new Error(
+      "No artwork paths to export (PDF may be text/images only, or only white fills). Outline text to paths, or turn off knock out white.",
+    );
+  }
   return out.join("");
 }
 
@@ -1728,23 +1751,29 @@ async function svgTextToPdfBlob(svgText, pageWpt, pageHpt) {
   const svg2pdfFn = window.svg2pdf;
   if (!jsPDFCtor) throw new Error("jsPDF failed to load");
 
-  const doc = new jsPDFCtor({
-    unit: "pt",
-    format: [Math.max(1, pageWpt), Math.max(1, pageHpt)],
-    compress: true,
-  });
+  const w = Math.max(1, pageWpt);
+  const h = Math.max(1, pageHpt);
+  const doc = new jsPDFCtor({ unit: "pt", format: [w, h], compress: true });
+
+  const parsed = new DOMParser().parseFromString(svgText, "image/svg+xml");
+  const svgEl = parsed.documentElement;
+  if (!svgEl || svgEl.querySelector("parsererror") || svgEl.tagName.toLowerCase() !== "svg") {
+    throw new Error("Failed to build artwork SVG");
+  }
+  // svg2pdf is happiest with unitless pt-sized width/height matching the page
+  svgEl.setAttribute("width", String(w));
+  svgEl.setAttribute("height", String(h));
 
   const container = document.createElement("div");
-  container.style.cssText = "position:fixed;left:-10000px;top:0;overflow:hidden;";
-  container.innerHTML = svgText;
-  const svgEl = container.querySelector("svg");
-  if (!svgEl) throw new Error("Failed to build artwork SVG");
+  container.style.cssText = "position:fixed;left:-10000px;top:0;width:0;height:0;overflow:hidden;";
+  container.appendChild(document.importNode(svgEl, true));
   document.body.appendChild(container);
+  const liveSvg = container.querySelector("svg");
   try {
     if (typeof doc.svg === "function") {
-      await doc.svg(svgEl, { x: 0, y: 0, width: pageWpt, height: pageHpt });
+      await doc.svg(liveSvg, { x: 0, y: 0, width: w, height: h });
     } else if (typeof svg2pdfFn === "function") {
-      await svg2pdfFn(svgEl, doc, { x: 0, y: 0, width: pageWpt, height: pageHpt });
+      await svg2pdfFn(liveSvg, doc, { x: 0, y: 0, width: w, height: h });
     } else {
       throw new Error("svg2pdf failed to load");
     }
@@ -1804,9 +1833,13 @@ async function exportPdf() {
     const pageW = controls.labelWidth * MM_TO_PT;
     const pageH = controls.labelHeight * MM_TO_PT;
     const blob = await svgTextToPdfBlob(svgText, pageW, pageH);
+    if (!blob || blob.size < 200) {
+      throw new Error("PDF writer produced an empty file — try Export SVG, or outline text to paths in the source");
+    }
     downloadBlob(blob, `${exportBaseName()}-artwork-${exportStamp()}.pdf`);
+    const inkNote = isNearWhiteCss(controls.artColor) ? " · ink black (print)" : "";
     setStatus(
-      `Exported artwork PDF ${controls.labelWidth}×${controls.labelHeight} mm (${(blob.size / 1024).toFixed(0)} KB)`,
+      `Exported artwork PDF ${controls.labelWidth}×${controls.labelHeight} mm (${(blob.size / 1024).toFixed(0)} KB)${inkNote}`,
     );
   } catch (err) {
     console.error(err);
