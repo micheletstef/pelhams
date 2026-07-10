@@ -82,13 +82,13 @@ const BOTTLE = {
 /** Photo mockup (amber bottle cutout) — label composites onto the cylindrical body. */
 const MOCKUP = {
   src: "assets/bottle-mockup-hr.png",
-  // Calibrated from the photo: parallel body band
-  bodyTopFrac: 0.565,
-  bodyBotFrac: 0.97,
-  bodyLeftFrac: 0.02,
-  bodyRightFrac: 0.98,
+  // Calibrated from SM_CiderBottle_Cutout_HR.png (848×4136)
+  bodyTopFrac: 0.676,
+  bodyBotFrac: 0.977,
+  bodyLeftFrac: 0.01,
+  bodyRightFrac: 0.99,
   highlightStrength: 0.4,
-  // Studio black → transparent (amber glass stays above this)
+  // Only used when the asset has an opaque black studio backdrop
   bgKnockoutLum: 14,
 };
 
@@ -113,14 +113,17 @@ const DEFAULTS = {
   matchAspect: true,
   knockoutWhite: true,
   artColor: "#000000",
-  outW: 420,
-  outH: 2048,
+  outW: 424,
+  outH: 2068,
   bgMode: "transparent",
   bgColor: "#808080",
   pdfPage: 1,
   sourceDpi: 300,
   pathDetail: 12,
 };
+
+const STORAGE_KEY = "pelham-cylinder-wrap-v1";
+const MM_TO_PT = 72 / 25.4;
 
 /** @type {HTMLCanvasElement | null} */
 let sourceCanvas = null;
@@ -157,7 +160,8 @@ function loadMockup() {
   return new Promise((resolve) => {
     const img = new Image();
     img.onload = () => {
-      mockupImage = cutoutBlackBackground(img);
+      // Prefer the asset's own alpha (true cutout). Only matte black if opaque.
+      mockupImage = imageHasAlpha(img) ? rasterizeImage(img) : cutoutBlackBackground(img);
       mockupHighlights = buildHighlightLayer(img);
       resolve(mockupImage);
     };
@@ -169,15 +173,35 @@ function loadMockup() {
   });
 }
 
-/** Remove solid studio black so the bottle sits on a white (or solid) backdrop. */
-function cutoutBlackBackground(img) {
+function rasterizeImage(img) {
   const { w, h } = mockupSize(img);
   const c = document.createElement("canvas");
   c.width = w;
   c.height = h;
+  c.getContext("2d").drawImage(img, 0, 0);
+  return c;
+}
+
+function imageHasAlpha(img) {
+  const { w, h } = mockupSize(img);
+  const c = document.createElement("canvas");
+  // Sample a few edge pixels — cutouts are transparent in the corners
+  c.width = Math.min(8, w);
+  c.height = Math.min(8, h);
+  const ctx = c.getContext("2d", { willReadFrequently: true });
+  ctx.drawImage(img, 0, 0, w, h, 0, 0, c.width, c.height);
+  const d = ctx.getImageData(0, 0, c.width, c.height).data;
+  for (let i = 3; i < d.length; i += 4) {
+    if (d[i] < 250) return true;
+  }
+  return false;
+}
+
+/** Remove solid studio black so the bottle sits on a white (or solid) backdrop. */
+function cutoutBlackBackground(img) {
+  const c = rasterizeImage(img);
   const ctx = c.getContext("2d");
-  ctx.drawImage(img, 0, 0);
-  const data = ctx.getImageData(0, 0, w, h);
+  const data = ctx.getImageData(0, 0, c.width, c.height);
   const d = data.data;
   const lim = MOCKUP.bgKnockoutLum;
   for (let i = 0; i < d.length; i += 4) {
@@ -252,6 +276,93 @@ function bottleGeometry(controls) {
     coverage,
     visibleLabelWidth,
   };
+}
+
+function collectSettings() {
+  return {
+    labelWidth: els.labelWidth.value,
+    labelHeight: els.labelHeight.value,
+    curvature: els.curvature.value,
+    edgeWarp: els.edgeWarp.value,
+    vBow: els.vBow.value,
+    perspective: els.perspective.value,
+    scaleX: els.scaleX.value,
+    scaleY: els.scaleY.value,
+    rotate: els.rotate.value,
+    offsetX: els.offsetX.value,
+    offsetY: els.offsetY.value,
+    edgeFade: els.edgeFade.value,
+    fadeStart: els.fadeStart.value,
+    crop: els.crop.value,
+    clipCylinder: els.clipCylinder.checked,
+    showGuides: els.showGuides.checked,
+    showMockup: els.showMockup.checked,
+    matchAspect: els.matchAspect.checked,
+    knockoutWhite: els.knockoutWhite.checked,
+    artColor: els.artColor.value,
+    outW: els.outW.value,
+    outH: els.outH.value,
+    bgMode: els.bgMode.value,
+    bgColor: els.bgColor.value,
+    pdfPage: els.pdfPage.value,
+    sourceDpi: els.sourceDpi.value,
+    pathDetail: els.pathDetail.value,
+  };
+}
+
+function applySettings(s) {
+  if (!s || typeof s !== "object") return;
+  const setVal = (el, key) => {
+    if (s[key] != null && el) el.value = String(s[key]);
+  };
+  const setCheck = (el, key) => {
+    if (typeof s[key] === "boolean" && el) el.checked = s[key];
+  };
+  setVal(els.labelWidth, "labelWidth");
+  setVal(els.labelHeight, "labelHeight");
+  setVal(els.curvature, "curvature");
+  setVal(els.edgeWarp, "edgeWarp");
+  setVal(els.vBow, "vBow");
+  setVal(els.perspective, "perspective");
+  setVal(els.scaleX, "scaleX");
+  setVal(els.scaleY, "scaleY");
+  setVal(els.rotate, "rotate");
+  setVal(els.offsetX, "offsetX");
+  setVal(els.offsetY, "offsetY");
+  setVal(els.edgeFade, "edgeFade");
+  setVal(els.fadeStart, "fadeStart");
+  setVal(els.crop, "crop");
+  setCheck(els.clipCylinder, "clipCylinder");
+  setCheck(els.showGuides, "showGuides");
+  setCheck(els.showMockup, "showMockup");
+  setCheck(els.matchAspect, "matchAspect");
+  setCheck(els.knockoutWhite, "knockoutWhite");
+  setVal(els.artColor, "artColor");
+  setVal(els.outW, "outW");
+  setVal(els.outH, "outH");
+  setVal(els.bgMode, "bgMode");
+  setVal(els.bgColor, "bgColor");
+  setVal(els.pdfPage, "pdfPage");
+  setVal(els.sourceDpi, "sourceDpi");
+  setVal(els.pathDetail, "pathDetail");
+}
+
+function saveSettings() {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(collectSettings()));
+  } catch {
+    /* ignore quota / private mode */
+  }
+}
+
+function loadSettings() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return;
+    applySettings(JSON.parse(raw));
+  } catch {
+    /* ignore corrupt data */
+  }
 }
 
 function readControls() {
@@ -877,6 +988,7 @@ function syncOutputAspect(controls) {
   const outW = Math.max(64, Math.round(h * aspect));
   if (Number(els.outW.value) !== outW) {
     els.outW.value = String(outW);
+    saveSettings();
   }
 }
 
@@ -1467,6 +1579,95 @@ function buildWarpedSvgFromPaths(pathSet, controls) {
   return out.join("");
 }
 
+function parseCssRgb(css) {
+  if (!css || css === "none") return null;
+  const s = String(css).trim().toLowerCase();
+  if (s.startsWith("#")) {
+    const n = s.slice(1);
+    const hex =
+      n.length === 3
+        ? n
+            .split("")
+            .map((c) => c + c)
+            .join("")
+        : n;
+    if (hex.length !== 6) return null;
+    const v = parseInt(hex, 16);
+    if (Number.isNaN(v)) return null;
+    return [(v >> 16) & 255, (v >> 8) & 255, v & 255];
+  }
+  const m = s.match(/rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)/);
+  if (m) return [Number(m[1]), Number(m[2]), Number(m[3])];
+  return null;
+}
+
+function isNearWhiteCss(css) {
+  const rgb = parseCssRgb(css);
+  if (!rgb) return false;
+  const lum = (0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]) / 255;
+  return lum > 0.92;
+}
+
+/** Knock out paper white and recolor remaining ink for vector export. */
+function stylePathForArtworkExport(path, controls) {
+  let fill = path.fill && path.fill !== "none" ? path.fill : "none";
+  let stroke = path.stroke && path.stroke !== "none" ? path.stroke : "none";
+  const art = controls.artColor || "#000000";
+
+  if (controls.knockoutWhite) {
+    if (fill !== "none" && isNearWhiteCss(fill)) fill = "none";
+    if (stroke !== "none" && isNearWhiteCss(stroke)) stroke = "none";
+  }
+
+  if (fill !== "none") fill = art;
+  if (stroke !== "none") stroke = art;
+
+  return { ...path, fill, stroke };
+}
+
+/**
+ * Flat label artwork (no cylinder warp) sized to the label mm.
+ * Source vectors map into viewBox; SVG declares physical mm for print.
+ */
+function buildIsolatedArtworkSvg(pathSet, controls) {
+  const { paths, w: srcW, h: srcH } = pathSet;
+  const mmW = controls.labelWidth;
+  const mmH = controls.labelHeight;
+
+  const out = [];
+  out.push(`<?xml version="1.0" encoding="UTF-8"?>`);
+  out.push(
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${fmt(mmW)}mm" height="${fmt(mmH)}mm" viewBox="0 0 ${fmt(srcW)} ${fmt(srcH)}">`,
+  );
+
+  let count = 0;
+  for (const src of paths) {
+    const p = stylePathForArtworkExport(src, controls);
+    if (p.fill === "none" && p.stroke === "none") continue;
+    count++;
+    let attrs = `d="${p.d}"`;
+    attrs += ` fill="${p.fill}"`;
+    if (p.fill !== "none" && p.fillOpacity != null && p.fillOpacity < 1) {
+      attrs += ` fill-opacity="${p.fillOpacity}"`;
+    }
+    if (p.fillRule && p.fillRule !== "nonzero") attrs += ` fill-rule="${p.fillRule}"`;
+    if (p.stroke !== "none") {
+      attrs += ` stroke="${p.stroke}"`;
+      if (p.strokeWidth) attrs += ` stroke-width="${p.strokeWidth}"`;
+      if (p.strokeOpacity != null && p.strokeOpacity < 1) {
+        attrs += ` stroke-opacity="${p.strokeOpacity}"`;
+      }
+    } else {
+      attrs += ` stroke="none"`;
+    }
+    out.push(`<path ${attrs}/>`);
+  }
+  out.push(`</svg>`);
+
+  if (!count) throw new Error("No artwork paths to export (try turning off knock out white)");
+  return out.join("");
+}
+
 async function getVectorPathSet() {
   if (sourceKind === "pdf" && sourcePdfBytes) {
     const pageNum = Number(els.pdfPage.value) || 1;
@@ -1485,7 +1686,14 @@ async function exportWarpedSvg(controls) {
   return buildWarpedSvgFromPaths(pathSet, controls);
 }
 
-async function svgTextToPdfBlob(svgText, controls) {
+async function exportIsolatedArtworkSvg(controls) {
+  const pathSet = await getVectorPathSet();
+  setStatus(`Extracting ${pathSet.paths.length} vector paths…`);
+  await new Promise((r) => setTimeout(r, 10));
+  return buildIsolatedArtworkSvg(pathSet, controls);
+}
+
+async function svgTextToPdfBlob(svgText, pageWpt, pageHpt) {
   // Load UMD builds so svg2pdf can attach to the same jsPDF instance.
   // The ESM build exports svg2pdf(el, pdf, opts) and does not reliably patch doc.svg.
   await loadScriptOnce(
@@ -1501,21 +1709,23 @@ async function svgTextToPdfBlob(svgText, controls) {
   const svg2pdfFn = window.svg2pdf;
   if (!jsPDFCtor) throw new Error("jsPDF failed to load");
 
-  const pageW = controls.outW * 0.75;
-  const pageH = controls.outH * 0.75;
-  const doc = new jsPDFCtor({ unit: "pt", format: [pageW, pageH], compress: true });
+  const doc = new jsPDFCtor({
+    unit: "pt",
+    format: [Math.max(1, pageWpt), Math.max(1, pageHpt)],
+    compress: true,
+  });
 
   const container = document.createElement("div");
   container.style.cssText = "position:fixed;left:-10000px;top:0;overflow:hidden;";
   container.innerHTML = svgText;
   const svgEl = container.querySelector("svg");
-  if (!svgEl) throw new Error("Failed to build warped SVG");
+  if (!svgEl) throw new Error("Failed to build artwork SVG");
   document.body.appendChild(container);
   try {
     if (typeof doc.svg === "function") {
-      await doc.svg(svgEl, { x: 0, y: 0, width: pageW, height: pageH });
+      await doc.svg(svgEl, { x: 0, y: 0, width: pageWpt, height: pageHpt });
     } else if (typeof svg2pdfFn === "function") {
-      await svg2pdfFn(svgEl, doc, { x: 0, y: 0, width: pageW, height: pageH });
+      await svg2pdfFn(svgEl, doc, { x: 0, y: 0, width: pageWpt, height: pageHpt });
     } else {
       throw new Error("svg2pdf failed to load");
     }
@@ -1565,16 +1775,20 @@ async function exportSvg() {
 async function exportPdf() {
   if (!sourceData) return;
   const controls = readControls();
-  setStatus("Exporting vector PDF…");
+  setStatus("Exporting artwork PDF…");
   setExportBusy(true);
   await new Promise((r) => setTimeout(r, 20));
 
   try {
-    const svgText = await exportWarpedSvg(controls);
+    const svgText = await exportIsolatedArtworkSvg(controls);
     setStatus("Writing PDF…");
-    const blob = await svgTextToPdfBlob(svgText, controls);
-    downloadBlob(blob, `${exportBaseName()}-cylinder-${exportStamp()}.pdf`);
-    setStatus(`Exported vector PDF (${(blob.size / 1024).toFixed(0)} KB)`);
+    const pageW = controls.labelWidth * MM_TO_PT;
+    const pageH = controls.labelHeight * MM_TO_PT;
+    const blob = await svgTextToPdfBlob(svgText, pageW, pageH);
+    downloadBlob(blob, `${exportBaseName()}-artwork-${exportStamp()}.pdf`);
+    setStatus(
+      `Exported artwork PDF ${controls.labelWidth}×${controls.labelHeight} mm (${(blob.size / 1024).toFixed(0)} KB)`,
+    );
   } catch (err) {
     console.error(err);
     setStatus(err?.message || "PDF export failed");
@@ -1730,6 +1944,9 @@ function resetControls() {
   els.bgMode.value = DEFAULTS.bgMode;
   els.bgColor.value = DEFAULTS.bgColor;
   els.pathDetail.value = DEFAULTS.pathDetail;
+  els.pdfPage.value = DEFAULTS.pdfPage;
+  els.sourceDpi.value = DEFAULTS.sourceDpi;
+  saveSettings();
   scheduleRender();
 }
 
@@ -1758,6 +1975,8 @@ function fitOutputToSource() {
 }
 
 function bindUi() {
+  loadSettings();
+
   const onFile = (file) => ingestFile(file);
 
   els.fileInput.addEventListener("change", () => {
@@ -1773,6 +1992,11 @@ function bindUi() {
     const file = e.dataTransfer?.files?.[0];
     if (file) onFile(file);
   });
+
+  const persistAndRender = () => {
+    saveSettings();
+    scheduleRender();
+  };
 
   const live = [
     els.labelWidth,
@@ -1799,20 +2023,30 @@ function bindUi() {
     els.outH,
     els.bgMode,
     els.bgColor,
+    els.pathDetail,
   ];
   live.forEach((el) => {
-    el.addEventListener("input", scheduleRender);
-    el.addEventListener("change", scheduleRender);
+    el.addEventListener("input", persistAndRender);
+    el.addEventListener("change", persistAndRender);
   });
 
-  els.pdfPage.addEventListener("change", reloadPdfPage);
-  els.sourceDpi.addEventListener("change", reloadPdfPage);
+  els.pdfPage.addEventListener("change", () => {
+    saveSettings();
+    reloadPdfPage();
+  });
+  els.sourceDpi.addEventListener("change", () => {
+    saveSettings();
+    reloadPdfPage();
+  });
 
   els.btnReset.addEventListener("click", resetControls);
   els.btnExport.addEventListener("click", exportPng);
   els.btnExportPdf.addEventListener("click", exportPdf);
   els.btnExportSvg.addEventListener("click", exportSvg);
-  els.btnFit.addEventListener("click", fitOutputToSource);
+  els.btnFit.addEventListener("click", () => {
+    fitOutputToSource();
+    saveSettings();
+  });
   els.btnRedraw.addEventListener("click", () => {
     renderToken++;
     renderPreview();
