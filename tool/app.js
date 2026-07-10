@@ -66,7 +66,8 @@ const els = {
 
 /**
  * Selectable vessels. Each has physical mm dims + a photo mockup calibration.
- * Can: standard EU 330 ml (Ø66.2 × 115.2 mm). Bottle: Univerre Rheinwein 75cl.
+ * Bottles: Univerre Rheinwein 75cl, Vetropack Keule 500ml.
+ * Can: standard EU 330 ml (Ø66.2 × 115.2 mm).
  */
 const VESSELS = {
   bottle75cl: {
@@ -119,6 +120,33 @@ const VESSELS = {
       bodyLeftFrac: 0.001,
       bodyRightFrac: 0.997,
       highlightStrength: 0.5,
+      bgKnockoutLum: 14,
+    },
+  },
+  // https://katalog.vetropack.com/catalogue/detail/28080
+  keule500: {
+    id: "keule500",
+    name: "Keule Softdrink 500ml",
+    kind: "bottle",
+    diameter: 70.1,
+    height: 227.5,
+    // Parallel body on SM_KeuleBottle.png
+    labelPanel: 123,
+    frontSrc: "assets/keule-mockup-hr.png",
+    frontNote: "Vetropack Art. 28080 · MC287R",
+    bodyTopFrac: 0.4,
+    bodyBotFrac: 0.94,
+    defaultLabelWidth: 120,
+    defaultLabelHeight: 123,
+    defaultOutW: 690,
+    defaultOutH: 2297,
+    mockup: {
+      src: "assets/keule-mockup-hr.png",
+      bodyTopFrac: 0.4,
+      bodyBotFrac: 0.94,
+      bodyLeftFrac: 0.01,
+      bodyRightFrac: 0.988,
+      highlightStrength: 0.4,
       bgKnockoutLum: 14,
     },
   },
