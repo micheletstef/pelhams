@@ -30,6 +30,8 @@ const els = {
   showGuides: $("show-guides"),
   showMockup: $("show-mockup"),
   matchAspect: $("match-aspect"),
+  knockoutWhite: $("knockout-white"),
+  artColor: $("art-color"),
   outW: $("out-w"),
   outH: $("out-h"),
   bgMode: $("bg-mode"),
@@ -79,13 +81,15 @@ const BOTTLE = {
 
 /** Photo mockup (amber bottle cutout) — label composites onto the cylindrical body. */
 const MOCKUP = {
-  src: "assets/bottle-mockup.png",
+  src: "assets/bottle-mockup-hr.png",
   // Calibrated from the photo: parallel body band
   bodyTopFrac: 0.565,
   bodyBotFrac: 0.97,
   bodyLeftFrac: 0.02,
   bodyRightFrac: 0.98,
   highlightStrength: 0.4,
+  // Studio black → transparent (amber glass stays above this)
+  bgKnockoutLum: 14,
 };
 
 const DEFAULTS = {
@@ -107,6 +111,8 @@ const DEFAULTS = {
   showGuides: false,
   showMockup: true,
   matchAspect: true,
+  knockoutWhite: true,
+  artColor: "#000000",
   outW: 420,
   outH: 2048,
   bgMode: "transparent",
@@ -140,13 +146,20 @@ let mockupHighlights = null;
 
 const previewCtx = els.preview.getContext("2d", { alpha: true });
 
+function mockupSize(img) {
+  return {
+    w: img.naturalWidth || img.width,
+    h: img.naturalHeight || img.height,
+  };
+}
+
 function loadMockup() {
   return new Promise((resolve) => {
     const img = new Image();
     img.onload = () => {
-      mockupImage = img;
+      mockupImage = cutoutBlackBackground(img);
       mockupHighlights = buildHighlightLayer(img);
-      resolve(img);
+      resolve(mockupImage);
     };
     img.onerror = () => {
       console.warn("Bottle mockup failed to load");
@@ -156,11 +169,37 @@ function loadMockup() {
   });
 }
 
+/** Remove solid studio black so the bottle sits on a white (or solid) backdrop. */
+function cutoutBlackBackground(img) {
+  const { w, h } = mockupSize(img);
+  const c = document.createElement("canvas");
+  c.width = w;
+  c.height = h;
+  const ctx = c.getContext("2d");
+  ctx.drawImage(img, 0, 0);
+  const data = ctx.getImageData(0, 0, w, h);
+  const d = data.data;
+  const lim = MOCKUP.bgKnockoutLum;
+  for (let i = 0; i < d.length; i += 4) {
+    const r = d[i];
+    const g = d[i + 1];
+    const b = d[i + 2];
+    const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+    if (lum < lim && r < lim + 6 && g < lim + 6 && b < lim + 6) {
+      // Soft edge: fade near-black fringe instead of a hard matte
+      d[i + 3] = Math.round(255 * (lum / lim));
+    }
+  }
+  ctx.putImageData(data, 0, 0);
+  return c;
+}
+
 /** Extract specular highlights from the bottle photo for glass realism. */
 function buildHighlightLayer(img) {
+  const { w, h } = mockupSize(img);
   const c = document.createElement("canvas");
-  c.width = img.naturalWidth;
-  c.height = img.naturalHeight;
+  c.width = w;
+  c.height = h;
   const ctx = c.getContext("2d");
   ctx.drawImage(img, 0, 0);
   const data = ctx.getImageData(0, 0, c.width, c.height);
@@ -235,6 +274,8 @@ function readControls() {
     showGuides: els.showGuides.checked,
     showMockup: els.showMockup.checked,
     matchAspect: els.matchAspect.checked,
+    knockoutWhite: els.knockoutWhite.checked,
+    artColor: els.artColor.value || DEFAULTS.artColor,
     outW: Math.max(64, Math.round(Number(els.outW.value) || DEFAULTS.outW)),
     outH: Math.max(64, Math.round(Number(els.outH.value) || DEFAULTS.outH)),
     bgMode: els.bgMode.value,
@@ -362,6 +403,21 @@ function hexToRgb(hex) {
 }
 
 /**
+ * Treat light paper as transparent ink; recolor remaining marks with artColor.
+ * Soft luminance → alpha so anti-aliased type stays clean.
+ */
+function styleArtworkSample(rgba, controls) {
+  if (!controls.knockoutWhite) return rgba;
+  const lum = 0.299 * rgba[0] + 0.587 * rgba[1] + 0.114 * rgba[2];
+  // White → 0 ink, black → full ink
+  let ink = 1 - lum / 255;
+  // Crush near-white so paper fully disappears
+  ink = Math.max(0, (ink - 0.04) / 0.96);
+  const [cr, cg, cb] = hexToRgb(controls.artColor);
+  return [cr, cg, cb, rgba[3] * ink];
+}
+
+/**
  * Core bottle wrap.
  *
  * Output X maps to cylinder angle via asin (edge foreshortening).
@@ -413,7 +469,7 @@ function warpToImageData(src, controls, width, height) {
 
       const sx = u * sw;
       const sy = v * sh;
-      const rgba = sampleBilinear(srcPixels, sw, sh, sx, sy);
+      const rgba = styleArtworkSample(sampleBilinear(srcPixels, sw, sh, sx, sy), controls);
 
       let a = rgba[3] * edgeFadeAlpha(nx, controls.edgeFade, controls.fadeStart);
 
@@ -514,8 +570,8 @@ function paintMockup(ctx, width, height, labelImage, controls) {
     ctx.fillStyle = controls.bgColor;
     ctx.fillRect(0, 0, width, height);
   } else {
-    // Photo has a black studio backdrop
-    ctx.fillStyle = "#000";
+    // Cutout bottle on a white studio backdrop
+    ctx.fillStyle = "#fff";
     ctx.fillRect(0, 0, width, height);
   }
 
@@ -535,7 +591,7 @@ function paintMockup(ctx, width, height, labelImage, controls) {
   tmp.getContext("2d").putImageData(labelImage, 0, 0);
 
   ctx.save();
-  // Opaque paper label on the body, then restore glass speculars
+  // Ink-only artwork on the body, then restore glass speculars
   ctx.drawImage(tmp, rect.lx, rect.ly, rect.labelW, rect.labelH);
 
   if (mockupHighlights) {
@@ -811,12 +867,13 @@ function syncOutputAspect(controls) {
   const h = controls.outH;
   let aspect;
   if (controls.showMockup && mockupImage) {
-    aspect = mockupImage.naturalWidth / mockupImage.naturalHeight;
-  } else {
-    const g = bottleGeometry(controls);
-    // Label-only artboard: bottle width × label height
-    aspect = g.width / g.labelHeight;
-  }
+      const { w: mw, h: mh } = mockupSize(mockupImage);
+      aspect = mw / mh;
+    } else {
+      const g = bottleGeometry(controls);
+      // Label-only artboard: bottle width × label height
+      aspect = g.width / g.labelHeight;
+    }
   const outW = Math.max(64, Math.round(h * aspect));
   if (Number(els.outW.value) !== outW) {
     els.outW.value = String(outW);
@@ -1666,6 +1723,8 @@ function resetControls() {
   els.showGuides.checked = DEFAULTS.showGuides;
   els.showMockup.checked = DEFAULTS.showMockup;
   els.matchAspect.checked = DEFAULTS.matchAspect;
+  els.knockoutWhite.checked = DEFAULTS.knockoutWhite;
+  els.artColor.value = DEFAULTS.artColor;
   els.outW.value = DEFAULTS.outW;
   els.outH.value = DEFAULTS.outH;
   els.bgMode.value = DEFAULTS.bgMode;
@@ -1682,7 +1741,8 @@ function fitOutputToSource() {
     els.outH.value = h;
     let aspect;
     if (controls.showMockup && mockupImage) {
-      aspect = mockupImage.naturalWidth / mockupImage.naturalHeight;
+      const { w: mw, h: mh } = mockupSize(mockupImage);
+      aspect = mw / mh;
     } else {
       const g = bottleGeometry(controls);
       aspect = g.width / g.labelHeight;
@@ -1733,6 +1793,8 @@ function bindUi() {
     els.showGuides,
     els.showMockup,
     els.matchAspect,
+    els.knockoutWhite,
+    els.artColor,
     els.outW,
     els.outH,
     els.bgMode,

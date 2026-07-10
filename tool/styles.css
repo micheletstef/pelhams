@@ -106,7 +106,7 @@ input[type="number"] {
 .viewport {
   overflow: hidden;
   padding: 0;
-  background: #000;
+  background: #fff;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -122,7 +122,7 @@ input[type="number"] {
   max-height: none;
   object-fit: contain;
   border: none;
-  background: #000;
+  background: #fff;
   image-rendering: auto;
 }
 
