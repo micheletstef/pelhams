@@ -1662,96 +1662,107 @@ function printInkColor(controls) {
   return art;
 }
 
+/** Export frame = front-visible warped label band (not full bottle, not flat artboard). */
+function warpedArtworkExportSize(controls, dpi = 300) {
+  const g = bottleGeometry(controls);
+  const mmW = Math.max(5, g.visibleLabelWidth * Math.max(0.2, controls.scaleX));
+  const mmH = Math.max(5, g.labelHeight);
+  const wPx = Math.max(64, Math.round((mmW / 25.4) * dpi));
+  const hPx = Math.max(64, Math.round((mmH / 25.4) * dpi));
+  return {
+    mmW,
+    mmH,
+    wPx,
+    hPx,
+    pageWpt: mmW * MM_TO_PT,
+    pageHpt: mmH * MM_TO_PT,
+    dpi,
+  };
+}
+
+function warpControlsForExport(controls) {
+  return {
+    ...controls,
+    // Match bottle label composite: UV scaleY stays 1; band height is mmH
+    scaleY: 1,
+    artColor: printInkColor(controls),
+    bgMode: "transparent",
+    showGuides: false,
+  };
+}
+
 /**
- * Flat label artwork (no cylinder warp).
- * Page matches the source artboard size (PDF points) so layout isn't stretched to label mm.
- * Returns null when there is no ink after knockout (caller should raster-fallback).
+ * Cylinder-warped isolated artwork (same projection as the bottle label), rasterized.
  */
-function buildIsolatedArtworkSvg(pathSet, controls) {
-  const { paths, w: srcW, h: srcH } = pathSet;
-  const pageWpt = srcW;
-  const pageHpt = srcH;
+function renderWarpedArtworkCanvas(controls, dpi = 300) {
+  if (!sourceData) throw new Error("No source artwork loaded");
+  const size = warpedArtworkExportSize(controls, dpi);
+  const image = warpToImageData(sourceData, warpControlsForExport(controls), size.wPx, size.hPx);
+  const canvas = document.createElement("canvas");
+  canvas.width = image.width;
+  canvas.height = image.height;
+  canvas.getContext("2d").putImageData(image, 0, 0);
+  return { canvas, ...size };
+}
+
+/**
+ * Warped vector SVG at label-band size. Styles ink like the mockup; returns null if no ink paths.
+ */
+function buildWarpedArtworkSvg(pathSet, controls) {
+  const size = warpedArtworkExportSize(controls, 72);
   const ink = printInkColor(controls);
+  const w = size.pageWpt;
+  const h = size.pageHpt;
+  const detail = controls.pathDetail;
+  const wc = warpControlsForExport(controls);
 
   const out = [];
   out.push(`<?xml version="1.0" encoding="UTF-8"?>`);
   out.push(
-    `<svg xmlns="http://www.w3.org/2000/svg" width="${fmt(pageWpt)}" height="${fmt(pageHpt)}" viewBox="0 0 ${fmt(srcW)} ${fmt(srcH)}">`,
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${fmt(w)}" height="${fmt(h)}" viewBox="0 0 ${fmt(w)} ${fmt(h)}">`,
   );
 
   let count = 0;
+  const { paths, w: srcW, h: srcH } = pathSet;
   for (const src of paths) {
-    const p = stylePathForArtworkExport(src, controls, ink);
-    if (p.fill === "none" && p.stroke === "none") continue;
+    const styled = stylePathForArtworkExport(src, controls, ink);
+    if (styled.fill === "none" && styled.stroke === "none") continue;
+    const warped = warpPathD(styled.d, wc, srcW, srcH, w, h, detail);
+    if (!warped) continue;
     count++;
-    let attrs = `d="${p.d}"`;
-    attrs += ` fill="${p.fill}"`;
-    if (p.fill !== "none" && p.fillOpacity != null && p.fillOpacity < 1) {
-      attrs += ` fill-opacity="${p.fillOpacity}"`;
+    let attrs = `d="${warped}"`;
+    attrs += ` fill="${styled.fill}"`;
+    if (styled.fill !== "none" && styled.fillOpacity != null && styled.fillOpacity < 1) {
+      attrs += ` fill-opacity="${styled.fillOpacity}"`;
     }
-    if (p.fillRule && p.fillRule !== "nonzero") attrs += ` fill-rule="${p.fillRule}"`;
-    if (p.stroke !== "none") {
-      attrs += ` stroke="${p.stroke}"`;
-      if (p.strokeWidth) attrs += ` stroke-width="${p.strokeWidth}"`;
-      if (p.strokeOpacity != null && p.strokeOpacity < 1) {
-        attrs += ` stroke-opacity="${p.strokeOpacity}"`;
-      }
+    if (styled.fillRule && styled.fillRule !== "nonzero") attrs += ` fill-rule="${styled.fillRule}"`;
+    if (styled.stroke !== "none") {
+      attrs += ` stroke="${styled.stroke}"`;
+      if (styled.strokeWidth) attrs += ` stroke-width="${styled.strokeWidth}"`;
     } else {
       attrs += ` stroke="none"`;
     }
     out.push(`<path ${attrs}/>`);
   }
   out.push(`</svg>`);
-
   if (!count) return null;
-  return out.join("");
+  return { svgText: out.join(""), ...size };
 }
 
-/** Apply knockout + print ink to a copy of source ImageData. */
-function renderIsolatedArtworkImageData(controls) {
-  if (!sourceData) throw new Error("No source artwork loaded");
-  const { width: sw, height: sh, data: src } = sourceData;
-  const out = new ImageData(sw, sh);
-  const dst = out.data;
-  const inkControls = { ...controls, artColor: printInkColor(controls) };
-  for (let i = 0; i < src.length; i += 4) {
-    const rgba = styleArtworkSample(
-      [src[i], src[i + 1], src[i + 2], src[i + 3]],
-      inkControls,
-    );
-    dst[i] = rgba[0];
-    dst[i + 1] = rgba[1];
-    dst[i + 2] = rgba[2];
-    dst[i + 3] = rgba[3];
-  }
-  return out;
+function buildWarpedArtworkSvgFromRaster(controls) {
+  const dpi = Math.max(150, Math.min(600, Number(els.sourceDpi.value) || 300));
+  const { canvas, pageWpt, pageHpt, mmW, mmH, dpi: usedDpi } = renderWarpedArtworkCanvas(controls, dpi);
+  const dataUrl = canvas.toDataURL("image/png");
+  const svgText = [
+    `<?xml version="1.0" encoding="UTF-8"?>`,
+    `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${fmt(pageWpt)}" height="${fmt(pageHpt)}" viewBox="0 0 ${fmt(pageWpt)} ${fmt(pageHpt)}">`,
+    `<image width="${fmt(pageWpt)}" height="${fmt(pageHpt)}" href="${dataUrl}" xlink:href="${dataUrl}"/>`,
+    `</svg>`,
+  ].join("");
+  return { svgText, pageWpt, pageHpt, mmW, mmH, dpi: usedDpi };
 }
 
-/** Source artboard size in PDF points (matches Illustrator page). */
-function sourceArtboardSizePt(controls) {
-  if (sourceVectorSize?.w > 0 && sourceVectorSize?.h > 0) {
-    return { w: sourceVectorSize.w, h: sourceVectorSize.h };
-  }
-  return {
-    w: controls.labelWidth * MM_TO_PT,
-    h: controls.labelHeight * MM_TO_PT,
-  };
-}
-
-/**
- * High-res flat artwork at the source artboard aspect (no stretch to label mm).
- * Pixel grid = rasterized source; PDF page = original artboard points.
- */
-function renderIsolatedArtworkCanvas(controls) {
-  const img = renderIsolatedArtworkImageData(controls);
-  const canvas = document.createElement("canvas");
-  canvas.width = img.width;
-  canvas.height = img.height;
-  canvas.getContext("2d").putImageData(img, 0, 0);
-  return canvas;
-}
-
-async function exportArtworkPdfFromRaster(controls) {
+async function exportWarpedArtworkPdfFromRaster(controls) {
   await loadScriptOnce(
     "jspdf-umd",
     "https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js",
@@ -1759,20 +1770,15 @@ async function exportArtworkPdfFromRaster(controls) {
   const jsPDFCtor = window.jspdf?.jsPDF || window.jsPDF;
   if (!jsPDFCtor) throw new Error("jsPDF failed to load");
 
-  const canvas = renderIsolatedArtworkCanvas(controls);
-  const page = sourceArtboardSizePt(controls);
+  const dpi = Math.max(150, Math.min(600, Number(els.sourceDpi.value) || 300));
+  const { canvas, pageWpt, pageHpt, mmW, mmH, dpi: usedDpi } = renderWarpedArtworkCanvas(controls, dpi);
   const doc = new jsPDFCtor({
     unit: "pt",
-    format: [Math.max(1, page.w), Math.max(1, page.h)],
+    format: [Math.max(1, pageWpt), Math.max(1, pageHpt)],
     compress: true,
   });
-
-  const dataUrl = canvas.toDataURL("image/png");
-  doc.addImage(dataUrl, "PNG", 0, 0, page.w, page.h);
-  const dpi = sourceVectorSize?.w
-    ? Math.round((canvas.width / sourceVectorSize.w) * 72)
-    : Number(els.sourceDpi.value) || 300;
-  return { blob: doc.output("blob"), dpi, pageWmm: (page.w / 72) * 25.4, pageHmm: (page.h / 72) * 25.4 };
+  doc.addImage(canvas.toDataURL("image/png"), "PNG", 0, 0, pageWpt, pageHpt);
+  return { blob: doc.output("blob"), dpi: usedDpi, mmW, mmH };
 }
 
 async function getVectorPathSet() {
@@ -1786,22 +1792,83 @@ async function getVectorPathSet() {
   throw new Error("Reload the PDF/SVG to enable vector export");
 }
 
-async function exportWarpedSvg(controls) {
-  const pathSet = await getVectorPathSet();
-  setStatus(`Warping ${pathSet.paths.length} vector paths…`);
-  await new Promise((r) => setTimeout(r, 10));
-  return buildWarpedSvgFromPaths(pathSet, controls);
+async function exportSvg() {
+  if (!sourceData) return;
+  const controls = readControls();
+  setStatus("Exporting warped artwork SVG…");
+  setExportBusy(true);
+  await new Promise((r) => setTimeout(r, 20));
+  try {
+    let result;
+    let mode = "vector";
+    try {
+      const pathSet = await getVectorPathSet();
+      result = buildWarpedArtworkSvg(pathSet, controls);
+      if (!result) throw new Error("NO_VECTOR_INK");
+    } catch (vecErr) {
+      console.warn("Vector warp SVG unavailable, using raster:", vecErr);
+      setStatus("Warping artwork (raster)…");
+      result = buildWarpedArtworkSvgFromRaster(controls);
+      mode = `raster ${result.dpi}dpi`;
+    }
+    downloadBlob(
+      new Blob([result.svgText], { type: "image/svg+xml" }),
+      `${exportBaseName()}-warped-${exportStamp()}.svg`,
+    );
+    setStatus(
+      `Exported warped SVG ${result.mmW.toFixed(1)}×${result.mmH.toFixed(1)} mm (${(result.svgText.length / 1024).toFixed(0)} KB · ${mode})`,
+    );
+  } catch (err) {
+    console.error(err);
+    setStatus(err?.message || "SVG export failed");
+  } finally {
+    setExportBusy(false);
+  }
 }
 
-async function exportIsolatedArtworkSvg(controls) {
-  const pathSet = await getVectorPathSet();
-  setStatus(`Extracting ${pathSet.paths.length} vector paths…`);
-  await new Promise((r) => setTimeout(r, 10));
-  const svg = buildIsolatedArtworkSvg(pathSet, controls);
-  if (!svg) {
-    throw new Error("NO_VECTOR_INK");
+async function exportPdf() {
+  if (!sourceData) return;
+  const controls = readControls();
+  setStatus("Exporting warped artwork PDF…");
+  setExportBusy(true);
+  await new Promise((r) => setTimeout(r, 20));
+
+  try {
+    let blob = null;
+    let mode = "vector";
+    let mmW;
+    let mmH;
+
+    try {
+      const pathSet = await getVectorPathSet();
+      const result = buildWarpedArtworkSvg(pathSet, controls);
+      if (!result) throw new Error("NO_VECTOR_INK");
+      setStatus("Writing warped vector PDF…");
+      blob = await svgTextToPdfBlob(result.svgText, result.pageWpt, result.pageHpt);
+      if (!blob || blob.size < 200) throw new Error("empty vector pdf");
+      mmW = result.mmW;
+      mmH = result.mmH;
+    } catch (vecErr) {
+      console.warn("Vector warp PDF unavailable, using raster:", vecErr);
+      setStatus("Warping artwork (raster)…");
+      const raster = await exportWarpedArtworkPdfFromRaster(controls);
+      blob = raster.blob;
+      mode = `raster ${raster.dpi}dpi`;
+      mmW = raster.mmW;
+      mmH = raster.mmH;
+    }
+
+    downloadBlob(blob, `${exportBaseName()}-warped-${exportStamp()}.pdf`);
+    const inkNote = isNearWhiteCss(controls.artColor) ? " · ink black" : "";
+    setStatus(
+      `Exported warped PDF ${mmW.toFixed(1)}×${mmH.toFixed(1)} mm (${(blob.size / 1024).toFixed(0)} KB · ${mode}${inkNote})`,
+    );
+  } catch (err) {
+    console.error(err);
+    setStatus(err?.message || "PDF export failed");
+  } finally {
+    setExportBusy(false);
   }
-  return svg;
 }
 
 async function svgTextToPdfBlob(svgText, pageWpt, pageHpt) {
@@ -1866,95 +1933,6 @@ function loadScriptOnce(id, src) {
     s.onerror = () => reject(new Error(`Failed to load ${src}`));
     document.head.appendChild(s);
   });
-}
-
-/** Flat artwork SVG with embedded PNG when the source has no outline paths. */
-function buildIsolatedArtworkSvgFromRaster(controls) {
-  const canvas = renderIsolatedArtworkCanvas(controls);
-  const page = sourceArtboardSizePt(controls);
-  const dataUrl = canvas.toDataURL("image/png");
-  return [
-    `<?xml version="1.0" encoding="UTF-8"?>`,
-    `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${fmt(page.w)}" height="${fmt(page.h)}" viewBox="0 0 ${fmt(page.w)} ${fmt(page.h)}">`,
-    `<image width="${fmt(page.w)}" height="${fmt(page.h)}" href="${dataUrl}" xlink:href="${dataUrl}"/>`,
-    `</svg>`,
-  ].join("");
-}
-
-async function exportSvg() {
-  if (!sourceData) return;
-  const controls = readControls();
-  setStatus("Exporting artwork SVG…");
-  setExportBusy(true);
-  await new Promise((r) => setTimeout(r, 20));
-  try {
-    let svgText;
-    let mode = "vector";
-    try {
-      svgText = await exportIsolatedArtworkSvg(controls);
-    } catch (vecErr) {
-      console.warn("Vector SVG unavailable, embedding artboard raster:", vecErr);
-      setStatus("Source has no outline paths — embedding artboard image in SVG…");
-      svgText = buildIsolatedArtworkSvgFromRaster(controls);
-      mode = "raster";
-    }
-    const page = sourceArtboardSizePt(controls);
-    downloadBlob(
-      new Blob([svgText], { type: "image/svg+xml" }),
-      `${exportBaseName()}-artwork-${exportStamp()}.svg`,
-    );
-    setStatus(
-      `Exported artwork SVG ${(page.w / 72 * 25.4).toFixed(1)}×${(page.h / 72 * 25.4).toFixed(1)} mm (${(svgText.length / 1024).toFixed(0)} KB · ${mode})`,
-    );
-  } catch (err) {
-    console.error(err);
-    setStatus(err?.message || "SVG export failed");
-  } finally {
-    setExportBusy(false);
-  }
-}
-
-async function exportPdf() {
-  if (!sourceData) return;
-  const controls = readControls();
-  setStatus("Exporting artwork PDF…");
-  setExportBusy(true);
-  await new Promise((r) => setTimeout(r, 20));
-
-  try {
-    const page = sourceArtboardSizePt(controls);
-    let blob = null;
-    let mode = "vector";
-    let pageWmm = (page.w / 72) * 25.4;
-    let pageHmm = (page.h / 72) * 25.4;
-
-    try {
-      const svgText = await exportIsolatedArtworkSvg(controls);
-      setStatus("Writing vector PDF…");
-      blob = await svgTextToPdfBlob(svgText, page.w, page.h);
-      if (!blob || blob.size < 200) throw new Error("empty vector pdf");
-    } catch (vecErr) {
-      // Source is likely live text / images — fall back to artboard-sized raster
-      console.warn("Vector artwork export unavailable, using raster:", vecErr);
-      setStatus("Source has no outline paths — exporting artboard PDF…");
-      const raster = await exportArtworkPdfFromRaster(controls);
-      blob = raster.blob;
-      mode = `raster ${raster.dpi}dpi`;
-      pageWmm = raster.pageWmm;
-      pageHmm = raster.pageHmm;
-    }
-
-    downloadBlob(blob, `${exportBaseName()}-artwork-${exportStamp()}.pdf`);
-    const inkNote = isNearWhiteCss(controls.artColor) ? " · ink black" : "";
-    setStatus(
-      `Exported artwork PDF ${pageWmm.toFixed(1)}×${pageHmm.toFixed(1)} mm (${(blob.size / 1024).toFixed(0)} KB · ${mode}${inkNote})`,
-    );
-  } catch (err) {
-    console.error(err);
-    setStatus(err?.message || "PDF export failed");
-  } finally {
-    setExportBusy(false);
-  }
 }
 
 async function loadSvgFile(file) {
