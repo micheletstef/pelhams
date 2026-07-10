@@ -42,8 +42,7 @@ legend {
   padding: 0 4px;
 }
 
-fieldset p,
-.bottle-controls p {
+fieldset p {
   margin: 6px 0;
 }
 
@@ -143,7 +142,7 @@ input[type="number"] {
 
 .diagram {
   width: 100%;
-  max-width: 260px;
+  max-width: 220px;
   margin: 0 auto;
   border: 1px solid #999;
   background: #fff;
@@ -154,12 +153,6 @@ input[type="number"] {
   display: block;
   width: 100%;
   height: auto;
-}
-
-.bottle-controls {
-  margin-top: 10px;
-  padding-top: 8px;
-  border-top: 1px solid #ddd;
 }
 
 @media (max-width: 900px) {

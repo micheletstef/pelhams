@@ -10,8 +10,6 @@ const els = {
   fileLabel: $("file-label"),
   pdfPage: $("pdf-page"),
   sourceDpi: $("source-dpi"),
-  diameter: $("bottle-width"),
-  bottleHeight: $("bottle-height"),
   bottleStats: $("bottle-stats"),
   labelWidth: $("label-width"),
   labelHeight: $("label-height"),
@@ -62,11 +60,20 @@ const els = {
   cropVal: $("crop-val"),
 };
 
+/** Fixed bottle: Univerre Rheinwein BVS30H60 75cl white 350mm */
+const BOTTLE = {
+  name: "Rheinwein BVS30H60 75cl",
+  diameter: 77.7, // body Ø mm
+  height: 349, // overall height mm
+  labelPanel: 105, // parallel body / label panel height mm
+  finishOd: 28.9,
+  neckOd: 25.5,
+  fillFromTop: 59.5,
+};
+
 const DEFAULTS = {
-  diameter: 70, // bottle width (mm) — circular cross-section
-  bottleHeight: 220,
   labelWidth: 120,
-  labelHeight: 160,
+  labelHeight: 105,
   curvature: 1,
   edgeWarp: 1,
   vBow: 0,
@@ -116,11 +123,10 @@ function setStatus(msg) {
 
 /** Physical bottle + label geometry derived from mm inputs. */
 function bottleGeometry(controls) {
-  // Width is the front-view width; for a round bottle this is also the diameter.
-  const diameter = Math.max(1, controls.diameter);
+  const diameter = BOTTLE.diameter;
   const radius = diameter / 2;
   const circumference = Math.PI * diameter;
-  const bottleHeight = Math.max(1, controls.bottleHeight);
+  const bottleHeight = BOTTLE.height;
   const labelWidth = Math.max(0.1, controls.labelWidth);
   const labelHeight = Math.max(0.1, controls.labelHeight);
   const labelArcRad = labelWidth / radius;
@@ -146,8 +152,6 @@ function bottleGeometry(controls) {
 
 function readControls() {
   return {
-    diameter: Number(els.diameter.value) || DEFAULTS.diameter,
-    bottleHeight: Number(els.bottleHeight.value) || DEFAULTS.bottleHeight,
     labelWidth: Number(els.labelWidth.value) || DEFAULTS.labelWidth,
     labelHeight: Number(els.labelHeight.value) || DEFAULTS.labelHeight,
     wrap: Number(els.curvature.value),
@@ -190,7 +194,7 @@ function updateLabels() {
   els.cropVal.textContent = `${(c.crop * 100).toFixed(1)}%`;
   els.bgColor.disabled = c.bgMode !== "solid";
   els.bottleStats.textContent =
-    `Width ${g.width.toFixed(1)} × height ${g.bottleHeight.toFixed(1)} mm · circumference ${g.circumference.toFixed(1)} mm`;
+    `${BOTTLE.name} · Ø${BOTTLE.diameter} × ${BOTTLE.height} mm · circ. ${g.circumference.toFixed(1)} mm`;
   els.labelArcReadout.textContent = `→ ${g.labelArcDeg.toFixed(1)}° around bottle (${(g.coverage * 100).toFixed(0)}% of circumference)`;
 }
 
@@ -565,7 +569,7 @@ function drawTopView(controls) {
       <line x1="${cx - r}" y1="${dimY}" x2="${cx + r}" y2="${dimY}" stroke="#000" stroke-width="1"/>
       <line x1="${cx - r}" y1="${dimY - 4}" x2="${cx - r}" y2="${dimY + 4}" stroke="#000" stroke-width="1"/>
       <line x1="${cx + r}" y1="${dimY - 4}" x2="${cx + r}" y2="${dimY + 4}" stroke="#000" stroke-width="1"/>
-      <text x="${cx}" y="${dimY - 6}" text-anchor="middle" font-size="11" font-family="system-ui,sans-serif">W ${g.width} mm</text>
+      <text x="${cx}" y="${dimY - 6}" text-anchor="middle" font-size="11" font-family="system-ui,sans-serif">Ø ${g.width} mm</text>
     </svg>`;
 
   els.topviewStats.innerHTML =
@@ -575,71 +579,104 @@ function drawTopView(controls) {
     `Label <b>${g.labelWidth}×${g.labelHeight} mm</b>`;
 }
 
-/** Front elevation of the bottle with label band as SVG DOM. */
+/** Front elevation: full Rhine bottle silhouette + label band. */
 function drawFrontView(controls) {
   const g = bottleGeometry(controls);
-  const w = 220;
-  const h = 340;
-  const pad = 28;
-  const availW = w - pad * 2;
-  const availH = h - pad * 2 - 24;
-  const scale = Math.min(availW / g.width, availH / g.bottleHeight);
-  const bw = g.width * scale;
-  const bh = g.bottleHeight * scale;
-  const bx = (w - bw) / 2;
-  const by = pad + 8;
-  const sideR = Math.min(bw * 0.08, 10);
+  const H = BOTTLE.height;
+  const R = BOTTLE.diameter / 2;
+  const rFinish = BOTTLE.finishOd / 2;
+  const rNeck = BOTTLE.neckOd / 2;
 
-  const bottlePath =
-    `M ${bx + sideR} ${by}` +
-    ` L ${bx + bw - sideR} ${by}` +
-    ` Q ${bx + bw} ${by} ${bx + bw} ${by + sideR}` +
-    ` L ${bx + bw} ${by + bh - sideR}` +
-    ` Q ${bx + bw} ${by + bh} ${bx + bw - sideR} ${by + bh}` +
-    ` L ${bx + sideR} ${by + bh}` +
-    ` Q ${bx} ${by + bh} ${bx} ${by + bh - sideR}` +
-    ` L ${bx} ${by + sideR}` +
-    ` Q ${bx} ${by} ${bx + sideR} ${by} Z`;
+  // Profile radii from top (y=0) → base (y=H), mm. Approximates BVS30H60 flute.
+  const bodyTop = H - 12 - BOTTLE.labelPanel; // start of parallel body
+  const bodyBot = H - 12; // end of parallel body (above heel)
+  const profile = [
+    { y: 0, r: rFinish },
+    { y: 8, r: rFinish },
+    { y: 21.6, r: rFinish * 0.98 },
+    { y: 28, r: rNeck },
+    { y: BOTTLE.fillFromTop, r: rNeck * 1.05 },
+    { y: 110, r: rNeck * 1.35 },
+    { y: 170, r: R * 0.55 },
+    { y: 210, r: R * 0.82 },
+    { y: bodyTop, r: R },
+    { y: bodyBot, r: R },
+    { y: H - 4, r: R * 0.97 },
+    { y: H, r: R * 0.88 },
+  ];
 
-  const lh = Math.min(bh, g.labelHeight * scale * controls.scaleY);
-  const cy = by + bh / 2 + controls.offsetY * bh;
-  let ly = cy - lh / 2;
-  ly = Math.max(by, Math.min(by + bh - lh, ly));
+  const w = 240;
+  const h = 420;
+  const padX = 36;
+  const padTop = 16;
+  const padBot = 36;
+  const scale = Math.min((w - padX * 2) / (R * 2), (h - padTop - padBot) / H);
+  const cx = w / 2;
+  const y0 = padTop;
 
-  const visW = Math.min(bw, g.visibleLabelWidth * scale);
-  let lx = bx + (bw - visW) / 2 + controls.offsetX * bw;
-  lx = Math.max(bx, Math.min(bx + bw - visW, lx));
+  const X = (r) => cx + r * scale;
+  const XL = (r) => cx - r * scale;
+  const Y = (mm) => y0 + mm * scale;
 
-  const bow = controls.hCurve * (visW * 0.08);
+  // Build closed bottle path (right side down, left side up)
+  let d = `M ${XL(profile[0].r).toFixed(1)} ${Y(profile[0].y).toFixed(1)}`;
+  for (let i = 1; i < profile.length; i++) {
+    d += ` L ${XL(profile[i].r).toFixed(1)} ${Y(profile[i].y).toFixed(1)}`;
+  }
+  for (let i = profile.length - 1; i >= 0; i--) {
+    d += ` L ${X(profile[i].r).toFixed(1)} ${Y(profile[i].y).toFixed(1)}`;
+  }
+  d += " Z";
+
+  // Label band on body (default panel sits on parallel section; offsetY shifts it)
+  const lh = Math.min(H * 0.9, g.labelHeight * controls.scaleY);
+  const bodyMid = (bodyTop + bodyBot) / 2;
+  let labelMid = bodyMid + controls.offsetY * H;
+  let ly = labelMid - lh / 2;
+  ly = Math.max(bodyTop - 20, Math.min(bodyBot - lh + 20, ly));
+  const ly2 = ly + lh;
+
+  const visW = Math.min(R * 2, g.visibleLabelWidth);
+  const halfVis = (visW / 2) * scale;
+  let lx = cx - halfVis + controls.offsetX * R * 2 * scale;
+  const maxHalf = R * scale;
+  lx = Math.max(cx - maxHalf, Math.min(cx + maxHalf - halfVis * 2, lx));
+  const lx2 = lx + halfVis * 2;
+  const bow = controls.hCurve * (halfVis * 0.16);
+
   const labelPath =
-    `M ${lx} ${ly + bow}` +
-    ` Q ${lx + visW / 2} ${ly - bow} ${lx + visW} ${ly + bow}` +
-    ` L ${lx + visW} ${ly + lh - bow}` +
-    ` Q ${lx + visW / 2} ${ly + lh + bow} ${lx} ${ly + lh - bow} Z`;
+    `M ${lx.toFixed(1)} ${(Y(ly) + bow).toFixed(1)}` +
+    ` Q ${((lx + lx2) / 2).toFixed(1)} ${(Y(ly) - bow).toFixed(1)} ${lx2.toFixed(1)} ${(Y(ly) + bow).toFixed(1)}` +
+    ` L ${lx2.toFixed(1)} ${(Y(ly2) - bow).toFixed(1)}` +
+    ` Q ${((lx + lx2) / 2).toFixed(1)} ${(Y(ly2) + bow).toFixed(1)} ${lx.toFixed(1)} ${(Y(ly2) - bow).toFixed(1)} Z`;
 
-  const dimY = by + bh + 14;
-  const dimX = bx + bw + 12;
+  const dimY = Y(H) + 14;
+  const dimX = X(R) + 14;
+  const bxL = XL(R);
+  const bxR = X(R);
 
   els.frontview.innerHTML = `
     <svg viewBox="0 0 ${w} ${h}" xmlns="http://www.w3.org/2000/svg" role="img">
-      <path d="${bottlePath}" fill="#f0f0f0" stroke="#000" stroke-width="1.5"/>
-      <line x1="${bx + bw / 2}" y1="${by}" x2="${bx + bw / 2}" y2="${by + bh}" stroke="#bbb" stroke-width="1" stroke-dasharray="3 3"/>
-      <path d="${labelPath}" fill="rgba(0,0,0,0.08)" stroke="#000" stroke-width="1.5"/>
-      <text x="${lx + visW / 2}" y="${ly + lh / 2 + 3}" text-anchor="middle" font-size="10" font-family="system-ui,sans-serif">label</text>
-      <line x1="${bx}" y1="${dimY}" x2="${bx + bw}" y2="${dimY}" stroke="#000" stroke-width="1"/>
-      <line x1="${bx}" y1="${dimY - 3}" x2="${bx}" y2="${dimY + 3}" stroke="#000" stroke-width="1"/>
-      <line x1="${bx + bw}" y1="${dimY - 3}" x2="${bx + bw}" y2="${dimY + 3}" stroke="#000" stroke-width="1"/>
-      <text x="${bx + bw / 2}" y="${dimY + 14}" text-anchor="middle" font-size="11" font-family="system-ui,sans-serif">${g.width} mm</text>
-      <line x1="${dimX}" y1="${by}" x2="${dimX}" y2="${by + bh}" stroke="#000" stroke-width="1"/>
-      <line x1="${dimX - 3}" y1="${by}" x2="${dimX + 3}" y2="${by}" stroke="#000" stroke-width="1"/>
-      <line x1="${dimX - 3}" y1="${by + bh}" x2="${dimX + 3}" y2="${by + bh}" stroke="#000" stroke-width="1"/>
-      <text x="${dimX + 12}" y="${by + bh / 2}" text-anchor="middle" font-size="11" font-family="system-ui,sans-serif"
-        transform="rotate(-90 ${dimX + 12} ${by + bh / 2})">${g.bottleHeight} mm</text>
+      <path d="${d}" fill="#f0f0f0" stroke="#000" stroke-width="1.4"/>
+      <line x1="${cx}" y1="${Y(0)}" x2="${cx}" y2="${Y(H)}" stroke="#bbb" stroke-width="1" stroke-dasharray="3 3"/>
+      <line x1="${XL(R * 0.9)}" y1="${Y(BOTTLE.fillFromTop)}" x2="${X(R * 0.9)}" y2="${Y(BOTTLE.fillFromTop)}"
+        stroke="#999" stroke-width="1" stroke-dasharray="2 2"/>
+      <path d="${labelPath}" fill="rgba(0,0,0,0.1)" stroke="#000" stroke-width="1.4"/>
+      <text x="${cx}" y="${((Y(ly) + Y(ly2)) / 2 + 3).toFixed(1)}" text-anchor="middle" font-size="10" font-family="system-ui,sans-serif">label</text>
+      <line x1="${bxL}" y1="${dimY}" x2="${bxR}" y2="${dimY}" stroke="#000" stroke-width="1"/>
+      <line x1="${bxL}" y1="${dimY - 3}" x2="${bxL}" y2="${dimY + 3}" stroke="#000" stroke-width="1"/>
+      <line x1="${bxR}" y1="${dimY - 3}" x2="${bxR}" y2="${dimY + 3}" stroke="#000" stroke-width="1"/>
+      <text x="${cx}" y="${dimY + 14}" text-anchor="middle" font-size="11" font-family="system-ui,sans-serif">Ø ${BOTTLE.diameter} mm</text>
+      <line x1="${dimX}" y1="${Y(0)}" x2="${dimX}" y2="${Y(H)}" stroke="#000" stroke-width="1"/>
+      <line x1="${dimX - 3}" y1="${Y(0)}" x2="${dimX + 3}" y2="${Y(0)}" stroke="#000" stroke-width="1"/>
+      <line x1="${dimX - 3}" y1="${Y(H)}" x2="${dimX + 3}" y2="${Y(H)}" stroke="#000" stroke-width="1"/>
+      <text x="${dimX + 12}" y="${Y(H / 2)}" text-anchor="middle" font-size="11" font-family="system-ui,sans-serif"
+        transform="rotate(-90 ${dimX + 12} ${Y(H / 2)})">${BOTTLE.height} mm</text>
     </svg>`;
 
   els.frontviewStats.innerHTML =
-    `Bottle <b>${g.width} × ${g.bottleHeight} mm</b><br>` +
-    `Label band <b>${g.labelHeight} mm</b> tall<br>` +
+    `Full bottle <b>${BOTTLE.height} mm</b> · body Ø <b>${BOTTLE.diameter} mm</b><br>` +
+    `Label panel on body ≈ <b>${BOTTLE.labelPanel} mm</b><br>` +
     `Visible label width ≈ <b>${g.visibleLabelWidth.toFixed(1)} mm</b>`;
 }
 
@@ -1470,8 +1507,6 @@ async function reloadPdfPage() {
 }
 
 function resetControls() {
-  els.diameter.value = DEFAULTS.diameter;
-  els.bottleHeight.value = DEFAULTS.bottleHeight;
   els.labelWidth.value = DEFAULTS.labelWidth;
   els.labelHeight.value = DEFAULTS.labelHeight;
   els.curvature.value = DEFAULTS.curvature;
@@ -1532,8 +1567,6 @@ function bindUi() {
   });
 
   const live = [
-    els.diameter,
-    els.bottleHeight,
     els.labelWidth,
     els.labelHeight,
     els.curvature,
