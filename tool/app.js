@@ -325,14 +325,23 @@ function buildHighlightLayer(img) {
     const r = d[i];
     const g = d[i + 1];
     const b = d[i + 2];
-    const lum = 0.299 * r + 0.587 * g + 0.114 * b;
-    // Keep only bright specular; crush the rest to black for screen blend
-    const t = Math.max(0, (lum - 140) / 115);
+    const maxC = Math.max(r, g, b);
+    const minC = Math.min(r, g, b);
+    // Speculars are bright + near-neutral. Skip colored body/liquid (e.g. juice).
+    const chroma = maxC - minC;
+    if (maxC < 205 || chroma > 45) {
+      d[i] = 0;
+      d[i + 1] = 0;
+      d[i + 2] = 0;
+      d[i + 3] = 0;
+      continue;
+    }
+    const t = Math.max(0, (maxC - 205) / 50);
     const v = Math.round(255 * t * t);
     d[i] = v;
     d[i + 1] = v;
     d[i + 2] = v;
-    d[i + 3] = lum > 8 ? 255 : 0;
+    d[i + 3] = 255;
   }
   ctx.putImageData(data, 0, 0);
   return c;
@@ -620,21 +629,24 @@ function hexToRgb(hex) {
 function styleArtworkSample(rgba, controls) {
   if (!controls.knockoutWhite) return rgba;
   const lum = (0.299 * rgba[0] + 0.587 * rgba[1] + 0.114 * rgba[2]) / 255;
-  // Also treat near-neutral light fills as paper (PDF “white” is often ~240–250 gray)
   const minC = Math.min(rgba[0], rgba[1], rgba[2]) / 255;
+  // PDF paper is often light gray, not pure white
   const paper = Math.max(lum, minC);
 
-  // Full ink below ~55% luminance; fully transparent above ~90%
-  const paperStart = 0.55;
-  const paperEnd = 0.9;
+  // Full ink ≤50%; fully transparent ≥78% (clears milky page fills)
+  const paperStart = 0.5;
+  const paperEnd = 0.78;
   let ink;
   if (paper >= paperEnd) ink = 0;
   else if (paper <= paperStart) ink = 1;
-  else ink = 1 - (paper - paperStart) / (paperEnd - paperStart);
-  // Quadratic falloff clears anti-aliased paper fringes without a milky veil
-  ink = ink * ink;
+  else {
+    const t = 1 - (paper - paperStart) / (paperEnd - paperStart);
+    ink = t * t;
+  }
 
   const [cr, cg, cb] = hexToRgb(controls.artColor);
+  // Force exact zeros so multiply/source-over never lifts the bottle
+  if (ink < 0.004) return [cr, cg, cb, 0];
   return [cr, cg, cb, rgba[3] * ink];
 }
 
@@ -822,12 +834,27 @@ function paintMockup(ctx, width, height, labelImage, controls) {
   ctx.globalCompositeOperation = "source-over";
 
   if (mockupHighlights) {
+    // Restore glass speculars only through ink — never wash the open label area
+    const shine = document.createElement("canvas");
+    shine.width = lw;
+    shine.height = lh;
+    const sctx = shine.getContext("2d");
+    sctx.drawImage(
+      mockupHighlights,
+      rect.lx,
+      rect.ly,
+      rect.labelW,
+      rect.labelH,
+      0,
+      0,
+      lw,
+      lh
+    );
+    sctx.globalCompositeOperation = "destination-in";
+    sctx.drawImage(tmp, 0, 0);
     ctx.globalCompositeOperation = "screen";
     ctx.globalAlpha = activeMockup().highlightStrength;
-    ctx.beginPath();
-    ctx.rect(rect.lx, rect.ly, rect.labelW, rect.labelH);
-    ctx.clip();
-    ctx.drawImage(mockupHighlights, 0, 0, width, height);
+    ctx.drawImage(shine, rect.lx, rect.ly, rect.labelW, rect.labelH);
     ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = "source-over";
   }
