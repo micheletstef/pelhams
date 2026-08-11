@@ -14,6 +14,10 @@ const els = {
   bottleStats: $("bottle-stats"),
   labelWidth: $("label-width"),
   labelHeight: $("label-height"),
+  lockLabelSize: $("lock-label-size"),
+  labelScale: $("label-scale"),
+  labelScaleVal: $("label-scale-val"),
+  btnNativeSize: $("btn-native-size"),
   labelArcReadout: $("label-arc-readout"),
   curvature: $("curvature"),
   edgeWarp: $("edge-warp"),
@@ -38,9 +42,6 @@ const els = {
   exportTarget: $("export-target"),
   outW: $("out-w"),
   outH: $("out-h"),
-  bgMode: $("bg-mode"),
-  bgColor: $("bg-color"),
-  pathDetail: $("path-detail"),
   btnReset: $("btn-reset"),
   btnExport: $("btn-export"),
   btnExportPdf: $("btn-export-pdf"),
@@ -169,6 +170,8 @@ const DEFAULTS = {
   vessel: DEFAULT_VESSEL_ID,
   labelWidth: 120,
   labelHeight: 105,
+  lockLabelSize: true,
+  labelScale: 1,
   curvature: 1,
   edgeWarp: 1,
   vBow: 0,
@@ -242,10 +245,62 @@ let sourcePdfBytes = null;
 let sourceSvgText = null;
 /** @type {{ w: number, h: number } | null} */
 let sourceVectorSize = null;
+/** @type {{ w: number, h: number } | null} Native artwork size in mm */
+let sourceNativeMm = null;
 let sourceKind = ""; // "pdf" | "svg"
 let sourceName = "";
 let renderToken = 0;
 let rafPending = 0;
+
+const PT_TO_MM = 25.4 / 72;
+const PX_TO_MM = 25.4 / 96;
+
+function ptsToMm(pt) {
+  return pt * PT_TO_MM;
+}
+
+/** Parse an SVG length (e.g. "120mm", "340") into millimetres. */
+function svgLengthToMm(raw) {
+  if (raw == null || raw === "") return null;
+  const s = String(raw).trim();
+  const m = s.match(/^([+-]?[\d.]+(?:e[+-]?\d+)?)\s*(mm|cm|in|pt|pc|px|%)?$/i);
+  if (!m) return null;
+  const n = Number(m[1]);
+  if (!Number.isFinite(n)) return null;
+  const u = (m[2] || "").toLowerCase();
+  if (u === "mm") return n;
+  if (u === "cm") return n * 10;
+  if (u === "in") return n * 25.4;
+  if (u === "pt") return ptsToMm(n);
+  if (u === "pc") return ptsToMm(n * 12);
+  if (u === "px") return n * PX_TO_MM;
+  if (u === "%") return null;
+  // Unitless: treat as PDF-style points (common for print SVGs)
+  return ptsToMm(n);
+}
+
+function setSourceNativeMm(wMm, hMm) {
+  const w = Math.max(1, Math.round(wMm * 100) / 100);
+  const h = Math.max(1, Math.round(hMm * 100) / 100);
+  sourceNativeMm = { w, h };
+  return sourceNativeMm;
+}
+
+function applyNativeLabelSize({ force = false } = {}) {
+  if (!sourceNativeMm) return false;
+  const locked = els.lockLabelSize?.checked ?? DEFAULTS.lockLabelSize;
+  if (!force && !locked) return false;
+  els.labelWidth.value = String(sourceNativeMm.w);
+  els.labelHeight.value = String(sourceNativeMm.h);
+  return true;
+}
+
+function syncLabelSizeLockUi() {
+  const locked = els.lockLabelSize?.checked ?? false;
+  if (els.labelWidth) els.labelWidth.disabled = locked;
+  if (els.labelHeight) els.labelHeight.disabled = locked;
+  if (els.btnNativeSize) els.btnNativeSize.disabled = !sourceNativeMm;
+}
 
 /** @type {HTMLImageElement | null} */
 let mockupImage = null;
@@ -283,8 +338,11 @@ function loadMockup() {
 
 /** Apply vessel-specific label size + output defaults (keeps warp knobs). */
 function applyVesselLabelDefaults(vessel = activeVessel()) {
-  els.labelWidth.value = String(vessel.defaultLabelWidth);
-  els.labelHeight.value = String(vessel.defaultLabelHeight);
+  // Prefer artwork native size when locked; otherwise vessel defaults.
+  if (!applyNativeLabelSize()) {
+    els.labelWidth.value = String(vessel.defaultLabelWidth);
+    els.labelHeight.value = String(vessel.defaultLabelHeight);
+  }
   els.outW.value = String(vessel.defaultOutW);
   els.outH.value = String(vessel.defaultOutH);
 }
@@ -392,8 +450,9 @@ function bottleGeometry(controls) {
   const radius = diameter / 2;
   const circumference = Math.PI * diameter;
   const bottleHeight = vessel.height;
-  const labelWidth = Math.max(0.1, controls.labelWidth);
-  const labelHeight = Math.max(0.1, controls.labelHeight);
+  const scale = Math.max(0.05, controls.labelScale || 1);
+  const labelWidth = Math.max(0.1, controls.labelWidth * scale);
+  const labelHeight = Math.max(0.1, controls.labelHeight * scale);
   const labelArcRad = labelWidth / radius;
   const labelArcDeg = (labelArcRad * 180) / Math.PI;
   const coverage = labelWidth / circumference;
@@ -420,6 +479,8 @@ function collectSettings() {
     vessel: els.vessel.value,
     labelWidth: els.labelWidth.value,
     labelHeight: els.labelHeight.value,
+    lockLabelSize: els.lockLabelSize.checked,
+    labelScale: els.labelScale.value,
     curvature: els.curvature.value,
     edgeWarp: els.edgeWarp.value,
     vBow: els.vBow.value,
@@ -443,11 +504,8 @@ function collectSettings() {
     exportTarget: els.exportTarget.value,
     outW: els.outW.value,
     outH: els.outH.value,
-    bgMode: els.bgMode.value,
-    bgColor: els.bgColor.value,
     pdfPage: els.pdfPage.value,
     sourceDpi: els.sourceDpi.value,
-    pathDetail: els.pathDetail.value,
   };
 }
 
@@ -462,6 +520,8 @@ function applySettings(s) {
   if (s.vessel && VESSELS[s.vessel]) els.vessel.value = s.vessel;
   setVal(els.labelWidth, "labelWidth");
   setVal(els.labelHeight, "labelHeight");
+  setCheck(els.lockLabelSize, "lockLabelSize");
+  setVal(els.labelScale, "labelScale");
   setVal(els.curvature, "curvature");
   setVal(els.edgeWarp, "edgeWarp");
   setVal(els.vBow, "vBow");
@@ -489,11 +549,8 @@ function applySettings(s) {
   }
   setVal(els.outW, "outW");
   setVal(els.outH, "outH");
-  setVal(els.bgMode, "bgMode");
-  setVal(els.bgColor, "bgColor");
   setVal(els.pdfPage, "pdfPage");
   setVal(els.sourceDpi, "sourceDpi");
-  setVal(els.pathDetail, "pathDetail");
 }
 
 function saveSettings() {
@@ -518,6 +575,8 @@ function readControls() {
   return {
     labelWidth: Number(els.labelWidth.value) || DEFAULTS.labelWidth,
     labelHeight: Number(els.labelHeight.value) || DEFAULTS.labelHeight,
+    lockLabelSize: els.lockLabelSize?.checked ?? DEFAULTS.lockLabelSize,
+    labelScale: Math.max(0.05, Number(els.labelScale?.value) || DEFAULTS.labelScale),
     wrap: Number(els.curvature.value),
     edgeSquash: Number(els.edgeWarp.value),
     hCurve: Number(els.vBow.value),
@@ -541,9 +600,9 @@ function readControls() {
     exportTarget: resolveExportTarget(els.exportTarget?.value || DEFAULTS.exportTarget),
     outW: Math.max(64, Math.round(Number(els.outW.value) || DEFAULTS.outW)),
     outH: Math.max(64, Math.round(Number(els.outH.value) || DEFAULTS.outH)),
-    bgMode: els.bgMode.value,
-    bgColor: els.bgColor.value,
-    pathDetail: Math.max(4, Math.min(40, Math.round(Number(els.pathDetail.value) || DEFAULTS.pathDetail))),
+    bgMode: DEFAULTS.bgMode,
+    bgColor: DEFAULTS.bgColor,
+    pathDetail: DEFAULTS.pathDetail,
   };
 }
 
@@ -562,15 +621,21 @@ function updateLabels() {
   els.edgeFadeVal.textContent = c.edgeFade.toFixed(2);
   els.fadeStartVal.textContent = `${Math.round(c.fadeStart * 100)}%`;
   els.cropVal.textContent = `${(c.crop * 100).toFixed(1)}%`;
-  els.bgColor.disabled = c.bgMode !== "solid";
+  if (els.labelScaleVal) els.labelScaleVal.textContent = `${Math.round(c.labelScale * 100)}%`;
   if (els.paperColor) els.paperColor.disabled = c.knockoutWhite;
   const mockupExport = c.exportTarget === "mockup";
   if (els.outW) els.outW.disabled = !mockupExport;
   if (els.outH) els.outH.disabled = !mockupExport;
+  syncLabelSizeLockUi();
   const vessel = activeVessel();
   els.bottleStats.textContent =
     `${vessel.name} · Ø${vessel.diameter} × ${vessel.height} mm · circ. ${g.circumference.toFixed(1)} mm`;
-  els.labelArcReadout.textContent = `${g.labelArcDeg.toFixed(1)}° · ${(g.coverage * 100).toFixed(0)}% of circ.`;
+  const nativeNote = sourceNativeMm
+    ? ` · native ${sourceNativeMm.w}×${sourceNativeMm.h}`
+    : "";
+  els.labelArcReadout.textContent =
+    `${g.labelWidth.toFixed(1)}×${g.labelHeight.toFixed(1)} mm` +
+    ` · ${g.labelArcDeg.toFixed(1)}° · ${(g.coverage * 100).toFixed(0)}% circ.${nativeNote}`;
 }
 
 /**
@@ -1249,10 +1314,6 @@ async function exportPng() {
       canvas.width = rendered.canvas.width;
       canvas.height = rendered.canvas.height;
       const ctx = canvas.getContext("2d");
-      if (controls.bgMode === "solid") {
-        ctx.fillStyle = controls.bgColor;
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-      }
       ctx.drawImage(rendered.canvas, 0, 0);
       statusNote = `${rendered.mmW.toFixed(1)}×${rendered.mmH.toFixed(1)} mm · ${canvas.width}×${canvas.height}px @ ${rendered.dpi}dpi`;
     } else {
@@ -1290,15 +1351,31 @@ function parseSvgSize(svgText) {
   const parsed = new DOMParser().parseFromString(svgText, "image/svg+xml");
   const root = parsed.documentElement;
   const vb = root.getAttribute("viewBox");
+  let w = 0;
+  let h = 0;
   if (vb) {
     const parts = vb.trim().split(/[\s,]+/).map(Number);
     if (parts.length === 4 && parts[2] > 0 && parts[3] > 0) {
-      return { w: parts[2], h: parts[3], root, parsed };
+      w = parts[2];
+      h = parts[3];
     }
   }
-  const w = parseFloat(root.getAttribute("width")) || 1024;
-  const h = parseFloat(root.getAttribute("height")) || 1024;
-  return { w, h, root, parsed };
+  if (!w || !h) {
+    w = parseFloat(root.getAttribute("width")) || 1024;
+    h = parseFloat(root.getAttribute("height")) || 1024;
+  }
+
+  const mmW = svgLengthToMm(root.getAttribute("width"));
+  const mmH = svgLengthToMm(root.getAttribute("height"));
+  let nativeMm = null;
+  if (mmW && mmH) {
+    nativeMm = { w: mmW, h: mmH };
+  } else if (vb && w > 0 && h > 0) {
+    // ViewBox user units → points (print SVG convention)
+    nativeMm = { w: ptsToMm(w), h: ptsToMm(h) };
+  }
+
+  return { w, h, root, parsed, nativeMm };
 }
 
 function fmt(n) {
@@ -2180,6 +2257,11 @@ async function loadSvgFile(file) {
 
   const size = parseSvgSize(text);
   sourceVectorSize = { w: size.w, h: size.h };
+  if (size.nativeMm) {
+    setSourceNativeMm(size.nativeMm.w, size.nativeMm.h);
+  } else {
+    sourceNativeMm = null;
+  }
 
   const svg = new Blob([text], { type: "image/svg+xml" });
   const url = URL.createObjectURL(svg);
@@ -2197,6 +2279,10 @@ async function loadSvgFile(file) {
     w = w || 1024;
     h = h || 1024;
     sourceVectorSize = { w: size.w || w, h: size.h || h };
+    if (!sourceNativeMm) {
+      // Rasterized px size @ 96dpi as last-resort native
+      setSourceNativeMm(w * PX_TO_MM, h * PX_TO_MM);
+    }
 
     // Upscale tiny SVGs so warp sampling stays sharp
     const minEdge = 1600;
@@ -2227,6 +2313,7 @@ async function loadPdfFile(file, pageNum, dpi) {
   const pdfPage = await pdfDoc.getPage(page);
   const unscaled = pdfPage.getViewport({ scale: 1 });
   sourceVectorSize = { w: unscaled.width, h: unscaled.height };
+  const native = setSourceNativeMm(ptsToMm(unscaled.width), ptsToMm(unscaled.height));
   const scale = dpi / 72;
   const viewport = pdfPage.getViewport({ scale });
   const c = document.createElement("canvas");
@@ -2234,7 +2321,10 @@ async function loadPdfFile(file, pageNum, dpi) {
   c.height = Math.round(viewport.height);
   const ctx = c.getContext("2d", { willReadFrequently: true });
   await pdfPage.render({ canvasContext: ctx, viewport }).promise;
-  setStatus(`PDF page ${page}/${pageCount} · ${c.width}×${c.height} @ ${dpi} DPI (native ${Math.round(unscaled.width)}×${Math.round(unscaled.height)} pt)`);
+  setStatus(
+    `PDF page ${page}/${pageCount} · ${c.width}×${c.height} @ ${dpi} DPI` +
+      ` (native ${native.w}×${native.h} mm)`,
+  );
   return c;
 }
 
@@ -2260,13 +2350,20 @@ async function ingestFile(file) {
 
     sourceCanvas = canvas;
     sourceData = canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height);
-    setStatus(`Loaded ${name} · ${canvas.width}×${canvas.height}`);
+    applyNativeLabelSize({ force: true });
+    syncLabelSizeLockUi();
+    saveSettings();
+    const native = sourceNativeMm
+      ? ` · label ${sourceNativeMm.w}×${sourceNativeMm.h} mm`
+      : "";
+    setStatus(`Loaded ${name} · ${canvas.width}×${canvas.height}${native}`);
     scheduleRender();
   } catch (err) {
     console.error(err);
     sourceKind = "";
     sourcePdfBytes = null;
     sourceSvgText = null;
+    sourceNativeMm = null;
     setStatus(err?.message || "Failed to load file");
     setExportBusy(true);
   }
@@ -2279,6 +2376,10 @@ async function reloadPdfPage() {
     const page = Number(els.pdfPage.value) || 1;
     const dpi = Number(els.sourceDpi.value) || 300;
     const pdfPage = await pdfDoc.getPage(Math.min(Math.max(1, page), pdfDoc.numPages));
+    const unscaled = pdfPage.getViewport({ scale: 1 });
+    sourceVectorSize = { w: unscaled.width, h: unscaled.height };
+    setSourceNativeMm(ptsToMm(unscaled.width), ptsToMm(unscaled.height));
+    applyNativeLabelSize();
     const viewport = pdfPage.getViewport({ scale: dpi / 72 });
     const c = document.createElement("canvas");
     c.width = Math.round(viewport.width);
@@ -2287,6 +2388,7 @@ async function reloadPdfPage() {
     await pdfPage.render({ canvasContext: ctx, viewport }).promise;
     sourceCanvas = c;
     sourceData = ctx.getImageData(0, 0, c.width, c.height);
+    saveSettings();
     scheduleRender();
   } catch (err) {
     setStatus(err?.message || "Failed to reload page");
@@ -2295,8 +2397,12 @@ async function reloadPdfPage() {
 
 function resetControls() {
   const vessel = activeVessel();
-  els.labelWidth.value = vessel.defaultLabelWidth;
-  els.labelHeight.value = vessel.defaultLabelHeight;
+  els.lockLabelSize.checked = DEFAULTS.lockLabelSize;
+  els.labelScale.value = DEFAULTS.labelScale;
+  if (!applyNativeLabelSize({ force: true })) {
+    els.labelWidth.value = vessel.defaultLabelWidth;
+    els.labelHeight.value = vessel.defaultLabelHeight;
+  }
   els.curvature.value = DEFAULTS.curvature;
   els.edgeWarp.value = DEFAULTS.edgeWarp;
   els.vBow.value = DEFAULTS.vBow;
@@ -2320,9 +2426,6 @@ function resetControls() {
   els.exportTarget.value = DEFAULTS.exportTarget;
   els.outW.value = vessel.defaultOutW;
   els.outH.value = vessel.defaultOutH;
-  els.bgMode.value = DEFAULTS.bgMode;
-  els.bgColor.value = DEFAULTS.bgColor;
-  els.pathDetail.value = DEFAULTS.pathDetail;
   els.pdfPage.value = DEFAULTS.pdfPage;
   els.sourceDpi.value = DEFAULTS.sourceDpi;
   saveSettings();
@@ -2382,6 +2485,7 @@ function bindUi() {
   const live = [
     els.labelWidth,
     els.labelHeight,
+    els.labelScale,
     els.curvature,
     els.edgeWarp,
     els.vBow,
@@ -2405,13 +2509,29 @@ function bindUi() {
     els.exportTarget,
     els.outW,
     els.outH,
-    els.bgMode,
-    els.bgColor,
-    els.pathDetail,
   ];
   live.forEach((el) => {
     el.addEventListener("input", persistAndRender);
     el.addEventListener("change", persistAndRender);
+  });
+
+  els.lockLabelSize.addEventListener("change", () => {
+    if (els.lockLabelSize.checked) applyNativeLabelSize({ force: true });
+    syncLabelSizeLockUi();
+    saveSettings();
+    scheduleRender();
+  });
+
+  els.btnNativeSize.addEventListener("click", () => {
+    if (!applyNativeLabelSize({ force: true })) {
+      setStatus("Upload a PDF/SVG to read native label size");
+      return;
+    }
+    saveSettings();
+    scheduleRender();
+    setStatus(
+      `Label size set to native ${sourceNativeMm.w}×${sourceNativeMm.h} mm`,
+    );
   });
 
   els.pdfPage.addEventListener("change", () => {

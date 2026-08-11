@@ -42,6 +42,15 @@
           <div class="row">
             <label class="field">W <input id="label-width" type="number" min="5" max="2000" value="120" step="0.1" /> mm</label>
             <label class="field">H <input id="label-height" type="number" min="5" max="1000" value="105" step="0.1" /> mm</label>
+            <label class="check" title="Lock base size; use Scale to resize">
+              <input id="lock-label-size" type="checkbox" checked /> Lock
+            </label>
+            <button type="button" id="btn-native-size" title="Reset W/H to artwork native size">Native</button>
+          </div>
+          <div class="slider-row">
+            <span class="slider-label">Scale</span>
+            <input id="label-scale" type="range" min="0.25" max="2.5" value="1" step="0.01" />
+            <span id="label-scale-val" class="val">100%</span>
           </div>
           <p id="label-arc-readout" class="stats muted"></p>
 
@@ -168,17 +177,6 @@
             <label class="field">W <input id="out-w" type="number" min="200" max="8000" value="424" step="1" /></label>
             <label class="field">H <input id="out-h" type="number" min="200" max="8000" value="2068" step="1" /></label>
           </div>
-          <div class="row">
-            <label class="field grow">
-              BG
-              <select id="bg-mode">
-                <option value="transparent" selected>Transparent</option>
-                <option value="solid">Solid</option>
-              </select>
-            </label>
-            <input id="bg-color" type="color" value="#808080" disabled />
-            <label class="field">Paths <input id="path-detail" type="number" min="4" max="40" value="12" step="1" /></label>
-          </div>
           <div class="btn-row">
             <button type="button" id="btn-export" disabled>PNG</button>
             <button type="button" id="btn-export-pdf" disabled>PDF</button>
@@ -213,6 +211,6 @@
       </main>
     </div>
 
-    <script type="module" src="app.js?v=20260811-export-art"></script>
+    <script type="module" src="app.js?v=20260811-trim-output"></script>
   </body>
 </html>

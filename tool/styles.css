@@ -224,10 +224,21 @@ select {
   margin: 6px 0 2px;
 }
 
-.btn-row button {
+.btn-row button,
+#btn-native-size {
   padding: 4px 8px;
   font: inherit;
   cursor: pointer;
+}
+
+#btn-native-size {
+  padding: 2px 6px;
+  font-size: 11px;
+}
+
+input[type="number"]:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 .btn-row button:disabled {
