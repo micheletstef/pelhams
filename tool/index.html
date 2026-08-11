@@ -60,6 +60,11 @@
             <span id="rotate-val" class="val">0°</span>
           </div>
           <div class="slider-row">
+            <span class="slider-label">Offset X</span>
+            <input id="offset-x" type="range" min="-100" max="100" value="0" step="0.1" />
+            <span id="offset-x-val" class="val">0%</span>
+          </div>
+          <div class="slider-row">
             <span class="slider-label">Offset Y</span>
             <input id="offset-y" type="range" min="-100" max="100" value="0" step="0.1" />
             <span id="offset-y-val" class="val">0%</span>
@@ -108,46 +113,18 @@
           <summary>
             <span>Projection</span>
             <button type="button" id="btn-reset-projection" class="btn-inline" onclick="event.stopPropagation()" title="Reset projection">Reset</button>
-            <label class="check summary-toggle" onclick="event.stopPropagation()">
-              <input id="projection-enabled" type="checkbox" checked />
-              On
-            </label>
           </summary>
           <div class="slider-row">
-            <span class="slider-label">Wrap</span>
-            <input id="curvature" type="range" min="0" max="1" value="1" step="0.01" />
-            <span id="curvature-val" class="val">1.00</span>
+            <span class="slider-label">Edge curve</span>
+            <input id="edge-curve" type="range" min="0" max="1" value="0" step="0.01" />
+            <span id="edge-curve-val" class="val">0%</span>
           </div>
           <div class="slider-row">
-            <span class="slider-label">Edge squash</span>
-            <input id="edge-warp" type="range" min="0.5" max="2" value="1" step="0.01" />
-            <span id="edge-warp-val" class="val">1.00</span>
+            <span class="slider-label">Curve start</span>
+            <input id="curve-start" type="range" min="0" max="100" value="50" step="1" />
+            <span id="curve-start-val" class="val">50%</span>
           </div>
-          <div class="slider-row">
-            <span class="slider-label">H. curve</span>
-            <input id="v-bow" type="range" min="-1" max="1" value="0" step="0.01" />
-            <span id="v-bow-val" class="val">0.00</span>
-          </div>
-          <div class="slider-row">
-            <span class="slider-label">Perspective</span>
-            <input id="perspective" type="range" min="0" max="1.5" value="0" step="0.01" />
-            <span id="perspective-val" class="val">0.00</span>
-          </div>
-          <div class="slider-row">
-            <span class="slider-label">Scale X</span>
-            <input id="scale-x" type="range" min="0.2" max="3" value="1" step="0.01" />
-            <span id="scale-x-val" class="val">1.00</span>
-          </div>
-          <div class="slider-row">
-            <span class="slider-label">Scale Y</span>
-            <input id="scale-y" type="range" min="0.2" max="3" value="1" step="0.01" />
-            <span id="scale-y-val" class="val">1.00</span>
-          </div>
-          <div class="slider-row">
-            <span class="slider-label">Offset X</span>
-            <input id="offset-x" type="range" min="-100" max="100" value="0" step="0.1" />
-            <span id="offset-x-val" class="val">0%</span>
-          </div>
+          <p class="muted">Vertical lines show where the edge curve begins</p>
         </details>
 
         <details class="fold">
@@ -218,6 +195,6 @@
       </main>
     </div>
 
-    <script type="module" src="app.js?v=20260811-flat-neutral"></script>
+    <script type="module" src="app.js?v=20260811-proj2"></script>
   </body>
 </html>

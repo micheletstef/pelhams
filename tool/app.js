@@ -19,14 +19,11 @@ const els = {
   labelScaleVal: $("label-scale-val"),
   btnNativeSize: $("btn-native-size"),
   labelArcReadout: $("label-arc-readout"),
-  projectionEnabled: $("projection-enabled"),
   btnResetProjection: $("btn-reset-projection"),
-  curvature: $("curvature"),
-  edgeWarp: $("edge-warp"),
-  vBow: $("v-bow"),
-  perspective: $("perspective"),
-  scaleX: $("scale-x"),
-  scaleY: $("scale-y"),
+  edgeCurve: $("edge-curve"),
+  curveStart: $("curve-start"),
+  edgeCurveVal: $("edge-curve-val"),
+  curveStartVal: $("curve-start-val"),
   rotate: $("rotate"),
   offsetX: $("offset-x"),
   offsetY: $("offset-y"),
@@ -56,12 +53,6 @@ const els = {
   topviewStats: $("topview-stats"),
   frontview: $("frontview"),
   frontviewStats: $("frontview-stats"),
-  curvatureVal: $("curvature-val"),
-  edgeWarpVal: $("edge-warp-val"),
-  vBowVal: $("v-bow-val"),
-  perspectiveVal: $("perspective-val"),
-  scaleXVal: $("scale-x-val"),
-  scaleYVal: $("scale-y-val"),
   rotateVal: $("rotate-val"),
   offsetXVal: $("offset-x-val"),
   offsetYVal: $("offset-y-val"),
@@ -174,13 +165,8 @@ const DEFAULTS = {
   labelHeight: 105,
   lockLabelSize: true,
   labelScale: 1,
-  projectionEnabled: true,
-  curvature: 1,
-  edgeWarp: 1,
-  vBow: 0,
-  perspective: 0,
-  scaleX: 1,
-  scaleY: 1,
+  edgeCurve: 0,
+  curveStart: 50,
   rotate: 0,
   offsetX: 0,
   offsetY: 0,
@@ -188,7 +174,7 @@ const DEFAULTS = {
   fadeStart: 60,
   crop: 0,
   clipCylinder: true,
-  showGuides: false,
+  showGuides: true,
   showMockup: true,
   matchAspect: true,
   knockoutWhite: true,
@@ -484,13 +470,8 @@ function collectSettings() {
     labelHeight: els.labelHeight.value,
     lockLabelSize: els.lockLabelSize.checked,
     labelScale: els.labelScale.value,
-    projectionEnabled: els.projectionEnabled.checked,
-    curvature: els.curvature.value,
-    edgeWarp: els.edgeWarp.value,
-    vBow: els.vBow.value,
-    perspective: els.perspective.value,
-    scaleX: els.scaleX.value,
-    scaleY: els.scaleY.value,
+    edgeCurve: els.edgeCurve.value,
+    curveStart: els.curveStart.value,
     rotate: els.rotate.value,
     offsetX: els.offsetX.value,
     offsetY: els.offsetY.value,
@@ -526,13 +507,8 @@ function applySettings(s) {
   setVal(els.labelHeight, "labelHeight");
   setCheck(els.lockLabelSize, "lockLabelSize");
   setVal(els.labelScale, "labelScale");
-  setCheck(els.projectionEnabled, "projectionEnabled");
-  setVal(els.curvature, "curvature");
-  setVal(els.edgeWarp, "edgeWarp");
-  setVal(els.vBow, "vBow");
-  setVal(els.perspective, "perspective");
-  setVal(els.scaleX, "scaleX");
-  setVal(els.scaleY, "scaleY");
+  setVal(els.edgeCurve, "edgeCurve");
+  setVal(els.curveStart, "curveStart");
   setVal(els.rotate, "rotate");
   setVal(els.offsetX, "offsetX");
   setVal(els.offsetY, "offsetY");
@@ -576,86 +552,21 @@ function loadSettings() {
   }
 }
 
-/** Flat / identity projection — used when Projection toggle is off or Reset. */
-const PROJECTION_OFF = {
-  wrap: 0,
-  edgeSquash: 1,
-  hCurve: 0,
-  perspective: 0,
-  scaleX: 1,
-  scaleY: 1,
-  offsetX: 0,
-  crop: 0,
-  edgeFade: 0,
-  clipCylinder: false,
-};
-
-function projectionControls() {
-  return [
-    els.curvature,
-    els.edgeWarp,
-    els.vBow,
-    els.perspective,
-    els.scaleX,
-    els.scaleY,
-    els.offsetX,
-  ];
-}
-
-function syncProjectionUi() {
-  const on = els.projectionEnabled?.checked ?? true;
-  const fold = els.projectionEnabled?.closest("details.fold");
-  if (fold) fold.classList.toggle("is-disabled", !on);
-  for (const el of projectionControls()) {
-    if (el) el.disabled = !on;
-  }
-}
-
-/** True when knobs match Reset — artwork must stay 1:1 (no pad/cylinder/crop). */
-function isNeutralProjection(controls) {
-  return (
-    (controls.wrap || 0) <= 0.001 &&
-    Math.abs((controls.edgeSquash || 1) - 1) <= 0.001 &&
-    Math.abs(controls.hCurve || 0) <= 0.001 &&
-    (controls.perspective || 0) <= 0.001 &&
-    Math.abs((controls.scaleX || 1) - 1) <= 0.001 &&
-    Math.abs((controls.scaleY || 1) - 1) <= 0.001 &&
-    Math.abs(controls.offsetX || 0) <= 0.001
-  );
-}
-
-/** Flat 1:1 sampling — Projection off, or On with Reset/neutral knobs. */
-function isFlatArtwork(controls) {
-  return !controls.projectionEnabled || isNeutralProjection(controls);
-}
-
 function readControls() {
-  const projectionEnabled = els.projectionEnabled?.checked ?? DEFAULTS.projectionEnabled;
-  const projection = projectionEnabled
-    ? {
-        wrap: Number(els.curvature.value),
-        edgeSquash: Number(els.edgeWarp.value),
-        hCurve: Number(els.vBow.value),
-        perspective: Number(els.perspective.value),
-        scaleX: Number(els.scaleX.value),
-        scaleY: Number(els.scaleY.value),
-        offsetX: Number(els.offsetX.value) / 100,
-        edgeFade: Number(els.edgeFade.value),
-        fadeStart: Number(els.fadeStart.value) / 100,
-        crop: Number(els.crop.value) / 100,
-        clipCylinder: els.clipCylinder.checked,
-      }
-    : { ...PROJECTION_OFF, fadeStart: Number(els.fadeStart.value) / 100 };
-
   return {
     labelWidth: Number(els.labelWidth.value) || DEFAULTS.labelWidth,
     labelHeight: Number(els.labelHeight.value) || DEFAULTS.labelHeight,
     lockLabelSize: els.lockLabelSize?.checked ?? DEFAULTS.lockLabelSize,
     labelScale: Math.max(0.05, Number(els.labelScale?.value) || DEFAULTS.labelScale),
-    projectionEnabled,
-    ...projection,
+    edgeCurve: Math.max(0, Math.min(1, Number(els.edgeCurve?.value) || 0)),
+    curveStart: Math.max(0, Math.min(1, (Number(els.curveStart?.value) || DEFAULTS.curveStart) / 100)),
     rotateDeg: Number(els.rotate.value),
+    offsetX: Number(els.offsetX.value) / 100,
     offsetY: Number(els.offsetY.value) / 100,
+    edgeFade: Number(els.edgeFade.value),
+    fadeStart: Number(els.fadeStart.value) / 100,
+    crop: Number(els.crop.value) / 100,
+    clipCylinder: els.clipCylinder.checked,
     showGuides: els.showGuides.checked,
     showMockup: els.showMockup.checked,
     matchAspect: els.matchAspect.checked,
@@ -675,15 +586,10 @@ function readControls() {
 function updateLabels() {
   const c = readControls();
   const g = bottleGeometry(c);
-  // Show stored slider values even when projection is bypassed
-  els.curvatureVal.textContent = Number(els.curvature.value).toFixed(2);
-  els.edgeWarpVal.textContent = Number(els.edgeWarp.value).toFixed(2);
-  els.vBowVal.textContent = Number(els.vBow.value).toFixed(2);
-  els.perspectiveVal.textContent = Number(els.perspective.value).toFixed(2);
-  els.scaleXVal.textContent = Number(els.scaleX.value).toFixed(2);
-  els.scaleYVal.textContent = Number(els.scaleY.value).toFixed(2);
+  if (els.edgeCurveVal) els.edgeCurveVal.textContent = `${Math.round(c.edgeCurve * 100)}%`;
+  if (els.curveStartVal) els.curveStartVal.textContent = `${Math.round(c.curveStart * 100)}%`;
   els.rotateVal.textContent = `${c.rotateDeg.toFixed(1)}°`;
-  els.offsetXVal.textContent = `${Number(els.offsetX.value).toFixed(1)}%`;
+  els.offsetXVal.textContent = `${(c.offsetX * 100).toFixed(1)}%`;
   els.offsetYVal.textContent = `${(c.offsetY * 100).toFixed(1)}%`;
   els.edgeFadeVal.textContent = c.edgeFade.toFixed(2);
   els.fadeStartVal.textContent = `${Math.round(c.fadeStart * 100)}%`;
@@ -694,7 +600,6 @@ function updateLabels() {
   if (els.outW) els.outW.disabled = !mockupExport;
   if (els.outH) els.outH.disabled = !mockupExport;
   syncLabelSizeLockUi();
-  syncProjectionUi();
   const vessel = activeVessel();
   els.bottleStats.textContent =
     `${vessel.name} · Ø${vessel.diameter} × ${vessel.height} mm · circ. ${g.circumference.toFixed(1)} mm`;
@@ -707,63 +612,38 @@ function updateLabels() {
 }
 
 /**
- * Screen X → cylinder angle θ (radians from label center).
- * nx is -1..1 across the *label* rect (not the full bottle).
- * Edges always map to ±halfArc so U spans the full artwork (keeps native ratio).
- * wrap blends flat ↔ asin foreshortening within that same angular span.
+ * Map label x (-1..1) → source x (-1..1).
+ * Center stays flat until curveStart; beyond that, edgeCurve blends in
+ * cylinder foreshortening (asin) toward the left/right rims.
  */
-function screenXToTheta(nx, wrap, edgeSquash, labelArcRad) {
+function mapNxToSource(nx, edgeCurve, curveStart) {
   const x = Math.max(-1, Math.min(1, nx));
-  const halfArc = Math.max(1e-6, labelArcRad / 2);
-  const flat = x * halfArc;
+  const amt = Math.max(0, Math.min(1, edgeCurve));
+  if (amt <= 1e-6) return x;
 
-  let cyl;
-  if (halfArc <= Math.PI / 2) {
-    // Chord model: edges at ±halfArc
-    cyl = Math.asin(Math.max(-1, Math.min(1, x * Math.sin(halfArc))));
-  } else {
-    // Wider than the front silhouette: keep asin foreshortening, but remap
-    // so edges still land on ±halfArc (no U-crop / horizontal squeeze).
-    cyl = (Math.asin(x) / (Math.PI / 2)) * halfArc;
-  }
+  const start = Math.max(0, Math.min(0.999, curveStart));
+  const ax = Math.abs(x);
+  const sign = x < 0 ? -1 : 1;
 
-  if (edgeSquash !== 1) {
-    const s = Math.max(0.2, edgeSquash);
-    const t = Math.sign(cyl) * Math.pow(Math.abs(cyl) / halfArc, s) * halfArc;
-    cyl = t;
-  }
-  return flat * (1 - wrap) + cyl * wrap;
+  if (ax <= start) return x;
+
+  const t = (ax - start) / (1 - start); // 0 at start line → 1 at rim
+  const tFlat = t;
+  const tCyl = Math.asin(Math.min(1, Math.max(0, t))) / (Math.PI / 2);
+  const tMix = tFlat * (1 - amt) + tCyl * amt;
+  return sign * (start + (1 - start) * tMix);
 }
 
-function thetaToScreenX(theta, wrap, edgeSquash, labelArcRad) {
-  // Inverse via binary search
+function mapSourceToNx(s, edgeCurve, curveStart) {
+  // Inverse of mapNxToSource via binary search
   let lo = -1;
   let hi = 1;
-  for (let i = 0; i < 32; i++) {
+  for (let i = 0; i < 28; i++) {
     const mid = (lo + hi) / 2;
-    const val = screenXToTheta(mid, wrap, edgeSquash, labelArcRad);
-    if (val < theta) lo = mid;
+    if (mapNxToSource(mid, edgeCurve, curveStart) < s) lo = mid;
     else hi = mid;
   }
   return (lo + hi) / 2;
-}
-
-/**
- * Vertical offset for horizontal lines (elliptical arc on the cylinder face).
- * 0 at center, max at left/right edges. Magnitude is a fraction of label-band height
- * and matches the front-view label overlay bow.
- */
-function horizontalCurveOffset(nx, hCurve) {
-  if (!hCurve) return 0;
-  const x = Math.max(-1, Math.min(1, nx));
-  const cosTheta = Math.sqrt(Math.max(0, 1 - x * x));
-  // ~0.18 of band height at the rim when hCurve = 1 (same visual weight as front view)
-  return hCurve * 0.18 * (1 - cosTheta);
-}
-
-function cylinderDepth(nx) {
-  const x = Math.max(-1, Math.min(1, nx));
-  return Math.sqrt(Math.max(0, 1 - x * x));
 }
 
 function edgeFadeAlpha(nx, edgeFade, fadeStart) {
@@ -889,10 +769,9 @@ function warpToImageData(src, controls, width, height) {
   const out = new ImageData(width, height);
   const dst = out.data;
 
-  const flat = isFlatArtwork(controls);
-  const crop = flat ? 0 : controls.crop;
+  const crop = controls.crop;
   const usableHalf = Math.max(0.01, 1 - crop);
-  const clip = flat ? false : controls.clipCylinder;
+  const clip = controls.clipCylinder;
 
   const [br, bg, bb] = hexToRgb(controls.bgColor);
   const solidBg = controls.bgMode === "solid";
@@ -915,8 +794,7 @@ function warpToImageData(src, controls, width, height) {
         continue;
       }
 
-      // x on the cylinder face (-1..1); flat mode uses the rect as-is
-      const nx = flat ? nxRaw : nxRaw / usableHalf;
+      const nx = nxRaw / usableHalf;
       if (Math.abs(nx) > 1) {
         if (solidBg) {
           dst[i] = br;
@@ -933,9 +811,7 @@ function warpToImageData(src, controls, width, height) {
       const sy = v * sh;
       const rgba = styleArtworkSample(sampleBilinear(srcPixels, sw, sh, sx, sy), controls);
 
-      let a = flat
-        ? rgba[3]
-        : rgba[3] * edgeFadeAlpha(nx, controls.edgeFade, controls.fadeStart);
+      let a = rgba[3] * edgeFadeAlpha(nx, controls.edgeFade, controls.fadeStart);
 
       if (solidBg) {
         const alpha = a / 255;
@@ -956,12 +832,21 @@ function warpToImageData(src, controls, width, height) {
 }
 
 function drawGuides(ctx, width, height, controls) {
-  if (!controls.showGuides) return;
   const crop = controls.crop;
-  const usableHalf = Math.max(0.01, 1 - crop);
   const left = width * crop;
   const right = width * (1 - crop);
-  // Fade start as distance from center on the cylinder face
+  const bandW = right - left;
+  drawCurveStartGuides(
+    ctx,
+    left,
+    0,
+    bandW,
+    height,
+    controls.curveStart,
+    Math.max(1, width * 0.002),
+  );
+  if (!controls.showGuides) return;
+  const usableHalf = Math.max(0.01, 1 - crop);
   const fadeX = (controls.fadeStart * usableHalf + 1) / 2;
   const fadeLeft = (1 - fadeX) * width;
   const fadeRight = fadeX * width;
@@ -1004,15 +889,9 @@ function mockupBodyRect(width, height, controls) {
   const panelW = Math.max(1, panelRight - panelLeft);
 
   // Height from physical mm; width from native aspect so scale never stretches.
-  const labelH = Math.max(
-    2,
-    panelH * (g.labelHeight / vessel.labelPanel) * controls.scaleY
-  );
+  const labelH = Math.max(2, panelH * (g.labelHeight / vessel.labelPanel));
   const aspect = g.labelWidth / Math.max(0.1, g.labelHeight);
-  const labelW = Math.max(
-    2,
-    labelH * aspect * (controls.scaleX / Math.max(0.001, controls.scaleY)),
-  );
+  const labelW = Math.max(2, labelH * aspect);
 
   // Free placement — offsets may put the label anywhere on the bottle
   const lx = panelLeft + (panelW - labelW) / 2 + controls.offsetX * panelW;
@@ -1131,13 +1010,7 @@ function renderPreview() {
         const rect = mockupBodyRect(w, h, controls);
         const lw = Math.max(64, Math.round(rect.labelW));
         const lh = Math.max(64, Math.round(rect.labelH));
-        // scaleY sizes the band; offsetX positions the rect on the bottle (not UV)
-        labelImage = warpToImageData(
-          sourceData,
-          { ...controls, scaleY: 1, offsetX: 0 },
-          lw,
-          lh,
-        );
+        labelImage = warpToImageData(sourceData, controls, lw, lh);
       }
       if (token !== renderToken) return;
       paintMockup(previewCtx, w, h, labelImage, controls);
@@ -1160,8 +1033,11 @@ function renderPreview() {
 }
 
 function drawGuidesOnMockup(ctx, width, height, controls) {
-  if (!controls.showGuides) return;
   const rect = mockupBodyRect(width, height, controls);
+  const lwGuide = Math.max(1, width * 0.0025);
+  // Curve-start lines always visible so the control is understandable
+  drawCurveStartGuides(ctx, rect.lx, rect.ly, rect.labelW, rect.labelH, controls.curveStart, lwGuide);
+  if (!controls.showGuides) return;
   ctx.save();
   ctx.strokeStyle = "rgba(255,255,255,0.55)";
   ctx.lineWidth = Math.max(1, width * 0.003);
@@ -1191,102 +1067,67 @@ function exportBaseName() {
 }
 
 /**
- * Vertical safe pad inside the label band (fraction of band height).
- * Keeps ascenders / letter tops off the hard top edge of the warp.
- */
-const ART_V_PAD = 0.03;
-
-/**
  * Map output (nx, ny) → source UV.
- *
- * Horiz. curve matches the front-view label bow:
- *   ny = v*(1-2h) + h   where h = horizontalCurveOffset(nx)
- * so top/bottom edges sit lower/higher at the sides (∩ top, ∪ bottom).
- *
- * Flat / Reset: true 1:1 (plus optional rotate) — no cylinder, pad, or bow.
+ * Edge curve foreshortens left/right past the curve-start lines; rotate optional.
  */
 function sampleSourceUV(nx, ny, controls) {
   const rotateRad = (controls.rotateDeg * Math.PI) / 180;
-
-  if (isFlatArtwork(controls)) {
-    // nx, ny in label rect → UV. Rotate around center only.
-    let u = nx * 0.5;
-    let v = ny - 0.5;
-    if (rotateRad) {
-      const c = Math.cos(-rotateRad);
-      const s = Math.sin(-rotateRad);
-      const ru = u * c - v * s;
-      const rv = u * s + v * c;
-      u = ru;
-      v = rv;
-    }
-    return { u: u + 0.5, v: v + 0.5, theta: nx };
+  const s = mapNxToSource(nx, controls.edgeCurve, controls.curveStart);
+  let u = s * 0.5;
+  let v = ny - 0.5;
+  if (rotateRad) {
+    const c = Math.cos(-rotateRad);
+    const sn = Math.sin(-rotateRad);
+    const ru = u * c - v * sn;
+    const rv = u * sn + v * c;
+    u = ru;
+    v = rv;
   }
-
-  const g = bottleGeometry(controls);
-  const theta = screenXToTheta(nx, controls.wrap, controls.edgeSquash, g.labelArcRad);
-  // Label centered at rotate=0 covers [-α/2, α/2]
-  const u = (theta - rotateRad) / (g.labelArcRad / controls.scaleX) + 0.5 + controls.offsetX;
-
-  const depth = cylinderDepth(nx);
-  const perspScale = 1 + controls.perspective * (1 - depth);
-  // Map label-band Y → normalized t (0 at top, 1 at bottom).
-  // Offset Y only positions the band on the bottle (mockupBodyRect), not UV.
-  const t = 0.5 + (ny - 0.5) / (controls.scaleY * perspScale);
-  const pad = ART_V_PAD;
-  const span = Math.max(0.2, 1 - 2 * pad);
-  const tArt = (t - pad) / span;
-
-  const h = Math.min(0.4, Math.max(0, horizontalCurveOffset(nx, controls.hCurve)));
-  const denom = Math.max(0.2, 1 - 2 * h);
-  // Invert ny = v*(1-2h)+h  →  v = (ny - h) / (1-2h)
-  const v = (tArt - h) / denom;
-  return { u, v, theta };
+  return { u: u + 0.5, v: v + 0.5, theta: s };
 }
 
 /** Inverse: source UV → output pixel XY (for vector path warping). */
 function sourceUVToOutputXY(u, v, controls, outW, outH) {
   const rotateRad = (controls.rotateDeg * Math.PI) / 180;
-
-  if (isFlatArtwork(controls)) {
-    let uu = u - 0.5;
-    let vv = v - 0.5;
-    if (rotateRad) {
-      const c = Math.cos(rotateRad);
-      const s = Math.sin(rotateRad);
-      const ru = uu * c - vv * s;
-      const rv = uu * s + vv * c;
-      uu = ru;
-      vv = rv;
-    }
-    const nx = uu * 2;
-    const ny = vv + 0.5;
-    return {
-      x: ((nx + 1) / 2) * outW,
-      y: ny * outH,
-      nx,
-      fade: 1,
-    };
+  let uu = u - 0.5;
+  let vv = v - 0.5;
+  if (rotateRad) {
+    const c = Math.cos(rotateRad);
+    const sn = Math.sin(rotateRad);
+    const ru = uu * c - vv * sn;
+    const rv = uu * sn + vv * c;
+    uu = ru;
+    vv = rv;
   }
-
-  const g = bottleGeometry(controls);
-  const theta = (u - 0.5 - controls.offsetX) * (g.labelArcRad / controls.scaleX) + rotateRad;
-  const nx = thetaToScreenX(theta, controls.wrap, controls.edgeSquash, g.labelArcRad);
-
-  const depth = cylinderDepth(nx);
-  const perspScale = 1 + controls.perspective * (1 - depth);
-  const h = Math.min(0.4, Math.max(0, horizontalCurveOffset(nx, controls.hCurve)));
-  // ny_band = v*(1-2h) + h
-  const tArt = v * (1 - 2 * h) + h;
-  const pad = ART_V_PAD;
-  const span = Math.max(0.2, 1 - 2 * pad);
-  const t = pad + tArt * span;
-  const ny = (t - 0.5) * controls.scaleY * perspScale + 0.5;
-
+  const s = uu * 2;
+  const nx = mapSourceToNx(s, controls.edgeCurve, controls.curveStart);
+  const ny = vv + 0.5;
   const usableHalf = Math.max(0.01, 1 - controls.crop);
-  const x = ((nx * usableHalf + 1) / 2) * outW;
-  const y = ny * outH;
-  return { x, y, nx, fade: edgeFadeAlpha(nx, controls.edgeFade, controls.fadeStart) };
+  return {
+    x: ((nx * usableHalf + 1) / 2) * outW,
+    y: ny * outH,
+    nx,
+    fade: edgeFadeAlpha(nx, controls.edgeFade, controls.fadeStart),
+  };
+}
+
+/** Vertical lines at ±curveStart on a label rect. */
+function drawCurveStartGuides(ctx, lx, ly, labelW, labelH, curveStart, lineWidth) {
+  const start = Math.max(0, Math.min(1, curveStart));
+  const cx = lx + labelW / 2;
+  const half = (labelW / 2) * start;
+  ctx.save();
+  ctx.strokeStyle = "rgba(255, 196, 64, 0.9)";
+  ctx.lineWidth = lineWidth;
+  ctx.setLineDash([4, 4]);
+  ctx.beginPath();
+  ctx.moveTo(cx - half, ly);
+  ctx.lineTo(cx - half, ly + labelH);
+  ctx.moveTo(cx + half, ly);
+  ctx.lineTo(cx + half, ly + labelH);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.restore();
 }
 
 function polar(cx, cy, r, canvasAng) {
@@ -1372,14 +1213,10 @@ function drawFrontView(controls) {
   const bodyBot = vessel.bodyBotFrac * 100;
   const bodyH = bodyBot - bodyTop;
 
-  const lhMm = Math.max(1, g.labelHeight * controls.scaleY);
+  const lhMm = Math.max(1, g.labelHeight);
   const lh = (lhMm / H) * 100;
   const aspect = g.labelWidth / Math.max(0.1, g.labelHeight);
-  const lw =
-    lh *
-    aspect *
-    (controls.scaleX / Math.max(0.001, controls.scaleY)) *
-    (H / (R * 2)); // mm aspect → % of vessel image width
+  const lw = lh * aspect * (H / (R * 2)); // mm aspect → % of vessel image width
   const bodyMid = (bodyTop + bodyBot) / 2;
   const ly = bodyMid - lh / 2 + controls.offsetY * 50;
   const ly2 = ly + lh;
@@ -1389,14 +1226,10 @@ function drawFrontView(controls) {
   const halfVis = lw / 2;
   const lx = cx - halfVis;
   const lx2 = lx + halfVis * 2;
-  // Same bow model as the artwork warp (fraction of label height at the rim)
-  const bow = horizontalCurveOffset(1, controls.hCurve) * lh;
-
-  const labelPath =
-    `M ${lx.toFixed(2)} ${(ly + bow).toFixed(2)}` +
-    ` Q ${((lx + lx2) / 2).toFixed(2)} ${(ly - bow).toFixed(2)} ${lx2.toFixed(2)} ${(ly + bow).toFixed(2)}` +
-    ` L ${lx2.toFixed(2)} ${(ly2 - bow).toFixed(2)}` +
-    ` Q ${((lx + lx2) / 2).toFixed(2)} ${(ly2 + bow).toFixed(2)} ${lx.toFixed(2)} ${(ly2 - bow).toFixed(2)} Z`;
+  const start = Math.max(0, Math.min(1, controls.curveStart));
+  const guideHalf = halfVis * start;
+  const g1 = cx - guideHalf;
+  const g2 = cx + guideHalf;
 
   els.frontview.innerHTML = `
     <div class="bottle-diagram">
@@ -1404,7 +1237,12 @@ function drawFrontView(controls) {
       <svg class="label-overlay" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
         <rect x="${inset}" y="${bodyTop.toFixed(2)}" width="${(100 - inset * 2).toFixed(2)}" height="${bodyH.toFixed(2)}"
           fill="none" stroke="#999" stroke-width="0.4" stroke-dasharray="1.5 1.5" vector-effect="non-scaling-stroke"/>
-        <path d="${labelPath}" fill="rgba(0,0,0,0.12)" stroke="#000" stroke-width="0.6" vector-effect="non-scaling-stroke"/>
+        <rect x="${lx.toFixed(2)}" y="${ly.toFixed(2)}" width="${(lx2 - lx).toFixed(2)}" height="${lh.toFixed(2)}"
+          fill="rgba(0,0,0,0.12)" stroke="#000" stroke-width="0.6" vector-effect="non-scaling-stroke"/>
+        <line x1="${g1.toFixed(2)}" y1="${ly.toFixed(2)}" x2="${g1.toFixed(2)}" y2="${ly2.toFixed(2)}"
+          stroke="#e6a800" stroke-width="0.5" stroke-dasharray="1.2 1.2" vector-effect="non-scaling-stroke"/>
+        <line x1="${g2.toFixed(2)}" y1="${ly.toFixed(2)}" x2="${g2.toFixed(2)}" y2="${ly2.toFixed(2)}"
+          stroke="#e6a800" stroke-width="0.5" stroke-dasharray="1.2 1.2" vector-effect="non-scaling-stroke"/>
         <text x="${cx.toFixed(2)}" y="${((ly + ly2) / 2).toFixed(2)}" text-anchor="middle" dominant-baseline="middle"
           font-size="4" font-family="system-ui,sans-serif" fill="#000">label</text>
       </svg>
@@ -1472,12 +1310,7 @@ async function exportPng() {
         const rect = mockupBodyRect(controls.outW, controls.outH, controls);
         const lw = Math.max(64, Math.round(rect.labelW));
         const lh = Math.max(64, Math.round(rect.labelH));
-        const labelImage = warpToImageData(
-          sourceData,
-          { ...controls, scaleY: 1, offsetX: 0 },
-          lw,
-          lh,
-        );
+        const labelImage = warpToImageData(sourceData, controls, lw, lh);
         paintMockup(ctx, controls.outW, controls.outH, labelImage, controls);
       } else {
         const image = warpToImageData(sourceData, controls, controls.outW, controls.outH);
@@ -2125,10 +1958,7 @@ function warpedArtworkExportSize(controls, dpi = 300) {
   const g = bottleGeometry(controls);
   const mmH = Math.max(5, g.labelHeight);
   const aspect = g.labelWidth / Math.max(0.1, g.labelHeight);
-  const mmW = Math.max(
-    5,
-    mmH * aspect * (Math.max(0.2, controls.scaleX) / Math.max(0.2, controls.scaleY)),
-  );
+  const mmW = Math.max(5, mmH * aspect);
   const wPx = Math.max(64, Math.round((mmW / 25.4) * dpi));
   const hPx = Math.max(64, Math.round((mmH / 25.4) * dpi));
   return {
@@ -2145,8 +1975,6 @@ function warpedArtworkExportSize(controls, dpi = 300) {
 function warpControlsForExport(controls) {
   return {
     ...controls,
-    // Match bottle label composite: UV scaleY stays 1; band height is mmH
-    scaleY: 1,
     artColor: printInkColor(controls),
     bgMode: "transparent",
     showGuides: false,
@@ -2551,17 +2379,10 @@ async function reloadPdfPage() {
   }
 }
 
-/** Neutral projection: artwork stays as-uploaded until knobs are moved. */
+/** Reset projection to flat (no edge curve). */
 function resetProjection() {
-  els.projectionEnabled.checked = true;
-  els.curvature.value = String(PROJECTION_OFF.wrap);
-  els.edgeWarp.value = String(PROJECTION_OFF.edgeSquash);
-  els.vBow.value = String(PROJECTION_OFF.hCurve);
-  els.perspective.value = String(PROJECTION_OFF.perspective);
-  els.scaleX.value = String(PROJECTION_OFF.scaleX);
-  els.scaleY.value = String(PROJECTION_OFF.scaleY);
-  els.offsetX.value = String(PROJECTION_OFF.offsetX * 100);
-  syncProjectionUi();
+  els.edgeCurve.value = String(DEFAULTS.edgeCurve);
+  els.curveStart.value = String(DEFAULTS.curveStart);
 }
 
 function resetControls() {
@@ -2574,6 +2395,7 @@ function resetControls() {
   }
   resetProjection();
   els.rotate.value = DEFAULTS.rotate;
+  els.offsetX.value = DEFAULTS.offsetX;
   els.offsetY.value = DEFAULTS.offsetY;
   els.edgeFade.value = DEFAULTS.edgeFade;
   els.fadeStart.value = DEFAULTS.fadeStart;
@@ -2649,13 +2471,8 @@ function bindUi() {
     els.labelWidth,
     els.labelHeight,
     els.labelScale,
-    els.projectionEnabled,
-    els.curvature,
-    els.edgeWarp,
-    els.vBow,
-    els.perspective,
-    els.scaleX,
-    els.scaleY,
+    els.edgeCurve,
+    els.curveStart,
     els.rotate,
     els.offsetX,
     els.offsetY,
