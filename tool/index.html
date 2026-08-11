@@ -64,6 +64,24 @@
           <p>
             <label><input id="knockout-white" type="checkbox" checked /> Knock out white background</label>
           </p>
+          <p>
+            <label>
+              Blend
+              <select id="art-blend">
+                <option value="opaque" selected>Opaque</option>
+                <option value="multiply">Multiply</option>
+                <option value="darken">Darken</option>
+                <option value="lighten">Lighten</option>
+                <option value="screen">Screen</option>
+                <option value="overlay">Overlay</option>
+                <option value="soft-light">Soft light</option>
+                <option value="hard-light">Hard light</option>
+                <option value="color-burn">Color burn</option>
+                <option value="color-dodge">Color dodge</option>
+              </select>
+            </label>
+            <small>(how ink sits on the mockup)</small>
+          </p>
         </fieldset>
 
         <fieldset>
@@ -180,6 +198,6 @@
       </main>
     </div>
 
-    <script type="module" src="app.js?v=20260811-artcolor"></script>
+    <script type="module" src="app.js?v=20260811-artblend"></script>
   </body>
 </html>

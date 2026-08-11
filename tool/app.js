@@ -33,6 +33,7 @@ const els = {
   matchAspect: $("match-aspect"),
   knockoutWhite: $("knockout-white"),
   artColor: $("art-color"),
+  artBlend: $("art-blend"),
   outW: $("out-w"),
   outH: $("out-h"),
   bgMode: $("bg-mode"),
@@ -184,6 +185,7 @@ const DEFAULTS = {
   matchAspect: true,
   knockoutWhite: true,
   artColor: "#000000",
+  artBlend: "opaque",
   outW: 424,
   outH: 2068,
   bgMode: "transparent",
@@ -195,6 +197,28 @@ const DEFAULTS = {
 
 const STORAGE_KEY = "pelham-cylinder-wrap-v1";
 const MM_TO_PT = 72 / 25.4;
+
+/** UI blend id → canvas globalCompositeOperation */
+const ART_BLEND_OPS = {
+  opaque: "source-over",
+  multiply: "multiply",
+  darken: "darken",
+  lighten: "lighten",
+  screen: "screen",
+  overlay: "overlay",
+  "soft-light": "soft-light",
+  "hard-light": "hard-light",
+  "color-burn": "color-burn",
+  "color-dodge": "color-dodge",
+};
+
+function resolveArtBlend(blend) {
+  return ART_BLEND_OPS[blend] ? blend : DEFAULTS.artBlend;
+}
+
+function artBlendOp(blend) {
+  return ART_BLEND_OPS[resolveArtBlend(blend)] || "source-over";
+}
 
 /** @type {HTMLCanvasElement | null} */
 let sourceCanvas = null;
@@ -404,6 +428,7 @@ function collectSettings() {
     matchAspect: els.matchAspect.checked,
     knockoutWhite: els.knockoutWhite.checked,
     artColor: els.artColor.value,
+    artBlend: els.artBlend.value,
     outW: els.outW.value,
     outH: els.outH.value,
     bgMode: els.bgMode.value,
@@ -443,6 +468,9 @@ function applySettings(s) {
   setCheck(els.matchAspect, "matchAspect");
   setCheck(els.knockoutWhite, "knockoutWhite");
   setVal(els.artColor, "artColor");
+  if (s.artBlend != null && ART_BLEND_OPS[s.artBlend] && els.artBlend) {
+    els.artBlend.value = s.artBlend;
+  }
   setVal(els.outW, "outW");
   setVal(els.outH, "outH");
   setVal(els.bgMode, "bgMode");
@@ -492,6 +520,7 @@ function readControls() {
     matchAspect: els.matchAspect.checked,
     knockoutWhite: els.knockoutWhite.checked,
     artColor: els.artColor.value || DEFAULTS.artColor,
+    artBlend: resolveArtBlend(els.artBlend?.value || DEFAULTS.artBlend),
     outW: Math.max(64, Math.round(Number(els.outW.value) || DEFAULTS.outW)),
     outH: Math.max(64, Math.round(Number(els.outH.value) || DEFAULTS.outH)),
     bgMode: els.bgMode.value,
@@ -842,13 +871,8 @@ function paintMockup(ctx, width, height, labelImage, controls) {
   tmp.getContext("2d").putImageData(labelImage, 0, 0);
 
   ctx.save();
-  // Multiply: ink darkens the glass body. Paper is already alpha-0 from knockout.
-  // Light art colors fall back to source-over so they stay visible on the bottle.
-  if (controls.knockoutWhite) {
-    const [ar, ag, ab] = hexToRgb(controls.artColor || "#000000");
-    const artLum = (0.299 * ar + 0.587 * ag + 0.114 * ab) / 255;
-    ctx.globalCompositeOperation = artLum > 0.65 ? "source-over" : "multiply";
-  }
+  // Paper is alpha-0 when knockout is on; blend mode controls how ink sits on glass.
+  ctx.globalCompositeOperation = artBlendOp(controls.artBlend);
   ctx.drawImage(tmp, rect.lx, rect.ly, rect.labelW, rect.labelH);
   ctx.globalCompositeOperation = "source-over";
 
@@ -2239,6 +2263,7 @@ function resetControls() {
   els.matchAspect.checked = DEFAULTS.matchAspect;
   els.knockoutWhite.checked = DEFAULTS.knockoutWhite;
   els.artColor.value = DEFAULTS.artColor;
+  els.artBlend.value = DEFAULTS.artBlend;
   els.outW.value = vessel.defaultOutW;
   els.outH.value = vessel.defaultOutH;
   els.bgMode.value = DEFAULTS.bgMode;
@@ -2321,6 +2346,7 @@ function bindUi() {
     els.matchAspect,
     els.knockoutWhite,
     els.artColor,
+    els.artBlend,
     els.outW,
     els.outH,
     els.bgMode,
