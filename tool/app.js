@@ -22,8 +22,10 @@ const els = {
   btnResetProjection: $("btn-reset-projection"),
   edgeCurve: $("edge-curve"),
   curveStart: $("curve-start"),
+  vertCurve: $("vert-curve"),
   edgeCurveVal: $("edge-curve-val"),
   curveStartVal: $("curve-start-val"),
+  vertCurveVal: $("vert-curve-val"),
   rotate: $("rotate"),
   offsetX: $("offset-x"),
   offsetY: $("offset-y"),
@@ -47,12 +49,9 @@ const els = {
   btnExportSvg: $("btn-export-svg"),
   btnFit: $("btn-fit"),
   btnRedraw: $("btn-redraw"),
-  status: $("status"),
   preview: $("preview"),
-  topview: $("topview"),
-  topviewStats: $("topview-stats"),
-  frontview: $("frontview"),
-  frontviewStats: $("frontview-stats"),
+  viewport: $("viewport"),
+  viewportStage: $("viewport-stage"),
   rotateVal: $("rotate-val"),
   offsetXVal: $("offset-x-val"),
   offsetYVal: $("offset-y-val"),
@@ -167,6 +166,7 @@ const DEFAULTS = {
   labelScale: 1,
   edgeCurve: 0,
   curveStart: 50,
+  vertCurve: 0,
   rotate: 0,
   offsetX: 0,
   offsetY: 0,
@@ -428,8 +428,36 @@ function buildHighlightLayer(img) {
   return c;
 }
 
-function setStatus(msg) {
-  els.status.textContent = msg;
+function setStatus(_msg) {
+  /* status bar removed — keep hook for export/load messages */
+}
+
+let viewZoom = 1;
+const VIEW_ZOOM_MIN = 0.2;
+const VIEW_ZOOM_MAX = 8;
+
+function applyViewZoom() {
+  if (!els.viewportStage) return;
+  els.viewportStage.style.transform = `scale(${viewZoom})`;
+}
+
+function bindViewerZoom() {
+  if (!els.viewport) return;
+  els.viewport.addEventListener(
+    "wheel",
+    (e) => {
+      e.preventDefault();
+      const factor = e.deltaY > 0 ? 1 / 1.12 : 1.12;
+      viewZoom = Math.min(VIEW_ZOOM_MAX, Math.max(VIEW_ZOOM_MIN, viewZoom * factor));
+      applyViewZoom();
+    },
+    { passive: false },
+  );
+  els.viewport.addEventListener("dblclick", () => {
+    viewZoom = 1;
+    applyViewZoom();
+  });
+  applyViewZoom();
 }
 
 /** Physical vessel + label geometry derived from mm inputs. */
@@ -472,6 +500,7 @@ function collectSettings() {
     labelScale: els.labelScale.value,
     edgeCurve: els.edgeCurve.value,
     curveStart: els.curveStart.value,
+    vertCurve: els.vertCurve.value,
     rotate: els.rotate.value,
     offsetX: els.offsetX.value,
     offsetY: els.offsetY.value,
@@ -509,6 +538,7 @@ function applySettings(s) {
   setVal(els.labelScale, "labelScale");
   setVal(els.edgeCurve, "edgeCurve");
   setVal(els.curveStart, "curveStart");
+  setVal(els.vertCurve, "vertCurve");
   setVal(els.rotate, "rotate");
   setVal(els.offsetX, "offsetX");
   setVal(els.offsetY, "offsetY");
@@ -558,8 +588,9 @@ function readControls() {
     labelHeight: Number(els.labelHeight.value) || DEFAULTS.labelHeight,
     lockLabelSize: els.lockLabelSize?.checked ?? DEFAULTS.lockLabelSize,
     labelScale: Math.max(0.05, Number(els.labelScale?.value) || DEFAULTS.labelScale),
-    edgeCurve: Math.max(0, Math.min(1, Number(els.edgeCurve?.value) || 0)),
+    edgeCurve: Math.max(-1, Math.min(1, Number(els.edgeCurve?.value) || 0)),
     curveStart: Math.max(0, Math.min(1, (Number(els.curveStart?.value) || DEFAULTS.curveStart) / 100)),
+    vertCurve: Math.max(-1, Math.min(1, Number(els.vertCurve?.value) || 0)),
     rotateDeg: Number(els.rotate.value),
     offsetX: Number(els.offsetX.value) / 100,
     offsetY: Number(els.offsetY.value) / 100,
@@ -586,8 +617,17 @@ function readControls() {
 function updateLabels() {
   const c = readControls();
   const g = bottleGeometry(c);
-  if (els.edgeCurveVal) els.edgeCurveVal.textContent = `${Math.round(c.edgeCurve * 100)}%`;
+  if (els.edgeCurveVal) {
+    const pct = Math.round(c.edgeCurve * 100);
+    els.edgeCurveVal.textContent =
+      pct === 0 ? "0%" : pct > 0 ? `+${pct}% stretch` : `${pct}% condense`;
+  }
   if (els.curveStartVal) els.curveStartVal.textContent = `${Math.round(c.curveStart * 100)}%`;
+  if (els.vertCurveVal) {
+    const pct = Math.round(c.vertCurve * 100);
+    els.vertCurveVal.textContent =
+      pct === 0 ? "None" : pct > 0 ? `↑ ${pct}%` : `↓ ${Math.abs(pct)}%`;
+  }
   els.rotateVal.textContent = `${c.rotateDeg.toFixed(1)}°`;
   els.offsetXVal.textContent = `${(c.offsetX * 100).toFixed(1)}%`;
   els.offsetYVal.textContent = `${(c.offsetY * 100).toFixed(1)}%`;
@@ -613,13 +653,14 @@ function updateLabels() {
 
 /**
  * Map label x (-1..1) → source x (-1..1).
- * Center stays flat until curveStart; beyond that, edgeCurve blends in
- * cylinder foreshortening (asin) toward the left/right rims.
+ * Center stays flat until curveStart; beyond that:
+ *   edgeCurve > 0 → stretch (cylinder asin foreshortening)
+ *   edgeCurve < 0 → condense (inverse sin expansion)
  */
 function mapNxToSource(nx, edgeCurve, curveStart) {
   const x = Math.max(-1, Math.min(1, nx));
-  const amt = Math.max(0, Math.min(1, edgeCurve));
-  if (amt <= 1e-6) return x;
+  const amt = Math.max(-1, Math.min(1, edgeCurve));
+  if (Math.abs(amt) <= 1e-6) return x;
 
   const start = Math.max(0, Math.min(0.999, curveStart));
   const ax = Math.abs(x);
@@ -629,9 +670,25 @@ function mapNxToSource(nx, edgeCurve, curveStart) {
 
   const t = (ax - start) / (1 - start); // 0 at start line → 1 at rim
   const tFlat = t;
-  const tCyl = Math.asin(Math.min(1, Math.max(0, t))) / (Math.PI / 2);
-  const tMix = tFlat * (1 - amt) + tCyl * amt;
-  return sign * (start + (1 - start) * tMix);
+  const tStretch = Math.asin(Math.min(1, Math.max(0, t))) / (Math.PI / 2);
+  const tCondense = Math.sin(t * (Math.PI / 2));
+  const tWarp =
+    amt >= 0
+      ? tFlat * (1 - amt) + tStretch * amt
+      : tFlat * (1 + amt) + tCondense * -amt;
+  return sign * (start + (1 - start) * tWarp);
+}
+
+/** Vertical bow past curve-start: + up at sides, − down at sides (fraction of band). */
+function verticalCurveAmount(nx, vertCurve, curveStart) {
+  const amt = Math.max(-1, Math.min(1, vertCurve));
+  if (Math.abs(amt) <= 1e-6) return 0;
+  const ax = Math.abs(Math.max(-1, Math.min(1, nx)));
+  const start = Math.max(0, Math.min(0.999, curveStart));
+  if (ax <= start) return 0;
+  const t = (ax - start) / (1 - start);
+  const smooth = t * t * (3 - 2 * t);
+  return amt * 0.22 * smooth;
 }
 
 function mapSourceToNx(s, edgeCurve, curveStart) {
@@ -831,20 +888,21 @@ function warpToImageData(src, controls, width, height) {
   return out;
 }
 
+const GUIDE_MAGENTA = "rgba(255, 0, 255, 0.95)";
+
 function drawGuides(ctx, width, height, controls) {
   const crop = controls.crop;
   const left = width * crop;
   const right = width * (1 - crop);
   const bandW = right - left;
-  drawCurveStartGuides(
-    ctx,
-    left,
-    0,
-    bandW,
-    height,
-    controls.curveStart,
-    Math.max(1, width * 0.002),
-  );
+  const lwGuide = Math.max(1, width * 0.002);
+  ctx.save();
+  ctx.strokeStyle = GUIDE_MAGENTA;
+  ctx.lineWidth = lwGuide;
+  ctx.setLineDash([]);
+  ctx.strokeRect(left, 0, bandW, height);
+  ctx.restore();
+  drawCurveStartGuides(ctx, left, 0, bandW, height, controls.curveStart, lwGuide);
   if (!controls.showGuides) return;
   const usableHalf = Math.max(0.01, 1 - crop);
   const fadeX = (controls.fadeStart * usableHalf + 1) / 2;
@@ -975,8 +1033,6 @@ function scheduleRender() {
   updateLabels();
   const controls = readControls();
   syncOutputAspect(controls);
-  drawTopView(readControls());
-  drawFrontView(readControls());
   if (rafPending) cancelAnimationFrame(rafPending);
   rafPending = requestAnimationFrame(() => {
     rafPending = 0;
@@ -1022,10 +1078,6 @@ function renderPreview() {
       drawGuides(previewCtx, w, h, controls);
     }
 
-    const ms = Math.round(performance.now() - t0);
-    setStatus(
-      `${sourceName || "mockup"} · ${controls.outW}×${controls.outH} · preview ${w}×${h} · ${ms}ms`
-    );
     setExportBusy(false);
     els.btnFit.disabled = !sourceData;
     els.btnRedraw.disabled = !sourceData && !mockupImage;
@@ -1035,7 +1087,13 @@ function renderPreview() {
 function drawGuidesOnMockup(ctx, width, height, controls) {
   const rect = mockupBodyRect(width, height, controls);
   const lwGuide = Math.max(1, width * 0.0025);
-  // Curve-start lines always visible so the control is understandable
+  // Artwork outline + curve-start lines (always on)
+  ctx.save();
+  ctx.strokeStyle = GUIDE_MAGENTA;
+  ctx.lineWidth = lwGuide;
+  ctx.setLineDash([]);
+  ctx.strokeRect(rect.lx, rect.ly, rect.labelW, rect.labelH);
+  ctx.restore();
   drawCurveStartGuides(ctx, rect.lx, rect.ly, rect.labelW, rect.labelH, controls.curveStart, lwGuide);
   if (!controls.showGuides) return;
   ctx.save();
@@ -1043,8 +1101,6 @@ function drawGuidesOnMockup(ctx, width, height, controls) {
   ctx.lineWidth = Math.max(1, width * 0.003);
   ctx.setLineDash([6, 4]);
   ctx.strokeRect(rect.panelLeft, rect.panelTop, rect.panelW, rect.panelH);
-  ctx.strokeStyle = "rgba(255,200,80,0.7)";
-  ctx.strokeRect(rect.lx, rect.ly, rect.labelW, rect.labelH);
   ctx.setLineDash([]);
   ctx.restore();
 }
@@ -1068,13 +1124,15 @@ function exportBaseName() {
 
 /**
  * Map output (nx, ny) → source UV.
- * Edge curve foreshortens left/right past the curve-start lines; rotate optional.
+ * Edge curve stretch/condense + vertical up/down bow past curve-start; rotate optional.
  */
 function sampleSourceUV(nx, ny, controls) {
   const rotateRad = (controls.rotateDeg * Math.PI) / 180;
   const s = mapNxToSource(nx, controls.edgeCurve, controls.curveStart);
+  const bow = verticalCurveAmount(nx, controls.vertCurve, controls.curveStart);
   let u = s * 0.5;
-  let v = ny - 0.5;
+  // +vertCurve lifts sides (sample higher on art); − drops sides
+  let v = ny - 0.5 - bow;
   if (rotateRad) {
     const c = Math.cos(-rotateRad);
     const sn = Math.sin(-rotateRad);
@@ -1101,7 +1159,8 @@ function sourceUVToOutputXY(u, v, controls, outW, outH) {
   }
   const s = uu * 2;
   const nx = mapSourceToNx(s, controls.edgeCurve, controls.curveStart);
-  const ny = vv + 0.5;
+  const bow = verticalCurveAmount(nx, controls.vertCurve, controls.curveStart);
+  const ny = vv + 0.5 + bow;
   const usableHalf = Math.max(0.01, 1 - controls.crop);
   return {
     x: ((nx * usableHalf + 1) / 2) * outW,
@@ -1117,7 +1176,7 @@ function drawCurveStartGuides(ctx, lx, ly, labelW, labelH, curveStart, lineWidth
   const cx = lx + labelW / 2;
   const half = (labelW / 2) * start;
   ctx.save();
-  ctx.strokeStyle = "rgba(255, 196, 64, 0.9)";
+  ctx.strokeStyle = GUIDE_MAGENTA;
   ctx.lineWidth = lineWidth;
   ctx.setLineDash([4, 4]);
   ctx.beginPath();
@@ -1230,6 +1289,12 @@ function drawFrontView(controls) {
   const guideHalf = halfVis * start;
   const g1 = cx - guideHalf;
   const g2 = cx + guideHalf;
+  const bow = verticalCurveAmount(1, controls.vertCurve, controls.curveStart) * lh;
+  const labelPath =
+    `M ${lx.toFixed(2)} ${(ly - bow).toFixed(2)}` +
+    ` Q ${cx.toFixed(2)} ${(ly + bow).toFixed(2)} ${lx2.toFixed(2)} ${(ly - bow).toFixed(2)}` +
+    ` L ${lx2.toFixed(2)} ${(ly2 + bow).toFixed(2)}` +
+    ` Q ${cx.toFixed(2)} ${(ly2 - bow).toFixed(2)} ${lx.toFixed(2)} ${(ly2 + bow).toFixed(2)} Z`;
 
   els.frontview.innerHTML = `
     <div class="bottle-diagram">
@@ -1237,8 +1302,7 @@ function drawFrontView(controls) {
       <svg class="label-overlay" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
         <rect x="${inset}" y="${bodyTop.toFixed(2)}" width="${(100 - inset * 2).toFixed(2)}" height="${bodyH.toFixed(2)}"
           fill="none" stroke="#999" stroke-width="0.4" stroke-dasharray="1.5 1.5" vector-effect="non-scaling-stroke"/>
-        <rect x="${lx.toFixed(2)}" y="${ly.toFixed(2)}" width="${(lx2 - lx).toFixed(2)}" height="${lh.toFixed(2)}"
-          fill="rgba(0,0,0,0.12)" stroke="#000" stroke-width="0.6" vector-effect="non-scaling-stroke"/>
+        <path d="${labelPath}" fill="rgba(0,0,0,0.12)" stroke="#000" stroke-width="0.6" vector-effect="non-scaling-stroke"/>
         <line x1="${g1.toFixed(2)}" y1="${ly.toFixed(2)}" x2="${g1.toFixed(2)}" y2="${ly2.toFixed(2)}"
           stroke="#e6a800" stroke-width="0.5" stroke-dasharray="1.2 1.2" vector-effect="non-scaling-stroke"/>
         <line x1="${g2.toFixed(2)}" y1="${ly.toFixed(2)}" x2="${g2.toFixed(2)}" y2="${ly2.toFixed(2)}"
@@ -2379,10 +2443,11 @@ async function reloadPdfPage() {
   }
 }
 
-/** Reset projection to flat (no edge curve). */
+/** Reset projection to flat (no edge / vert curve). */
 function resetProjection() {
   els.edgeCurve.value = String(DEFAULTS.edgeCurve);
   els.curveStart.value = String(DEFAULTS.curveStart);
+  els.vertCurve.value = String(DEFAULTS.vertCurve);
 }
 
 function resetControls() {
@@ -2473,6 +2538,7 @@ function bindUi() {
     els.labelScale,
     els.edgeCurve,
     els.curveStart,
+    els.vertCurve,
     els.rotate,
     els.offsetX,
     els.offsetY,
@@ -2546,6 +2612,7 @@ function bindUi() {
     renderPreview();
   });
 
+  bindViewerZoom();
   scheduleRender();
 }
 

@@ -116,7 +116,7 @@
           </summary>
           <div class="slider-row">
             <span class="slider-label">Edge curve</span>
-            <input id="edge-curve" type="range" min="0" max="1" value="0" step="0.01" />
+            <input id="edge-curve" type="range" min="-1" max="1" value="0" step="0.01" />
             <span id="edge-curve-val" class="val">0%</span>
           </div>
           <div class="slider-row">
@@ -124,7 +124,12 @@
             <input id="curve-start" type="range" min="0" max="100" value="50" step="1" />
             <span id="curve-start-val" class="val">50%</span>
           </div>
-          <p class="muted">Vertical lines show where the edge curve begins</p>
+          <div class="slider-row">
+            <span class="slider-label">Vert curve</span>
+            <input id="vert-curve" type="range" min="-1" max="1" value="0" step="0.01" />
+            <span id="vert-curve-val" class="val">None</span>
+          </div>
+          <p class="muted">Edge: condense ← 0 → stretch · Vert: down ← 0 → up · Lines = curve start</p>
         </details>
 
         <details class="fold">
@@ -173,28 +178,14 @@
       </aside>
 
       <main class="stage">
-        <p id="status">Upload a PDF or SVG to begin</p>
-        <div class="stage-body">
-          <div class="viewport" id="viewport">
+        <div class="viewport" id="viewport" title="Scroll to zoom">
+          <div class="viewport-stage" id="viewport-stage">
             <canvas id="preview" width="1400" height="2000"></canvas>
           </div>
-          <aside class="views-panel">
-            <section class="view-block">
-              <h2>Front view</h2>
-              <div id="frontview" class="diagram" aria-label="Front view of vessel"></div>
-              <p id="frontview-stats" class="stats"></p>
-            </section>
-            <section class="view-block">
-              <h2>Top view</h2>
-              <div id="topview" class="diagram" aria-label="Top view of vessel"></div>
-              <p id="topview-stats" class="stats"></p>
-              <p class="hint">Circle = vessel · thick arc = label · dashed chord = front</p>
-            </section>
-          </aside>
         </div>
       </main>
     </div>
 
-    <script type="module" src="app.js?v=20260811-proj2"></script>
+    <script type="module" src="app.js?v=20260811-magenta"></script>
   </body>
 </html>
