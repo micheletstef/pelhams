@@ -589,8 +589,22 @@ function buildHighlightLayer(img) {
   return c;
 }
 
-function setStatus(_msg) {
-  /* status bar removed — keep hook for export/load messages */
+function setStatus(msg) {
+  if (!msg) return;
+  if (els.fileLabel) {
+    els.fileLabel.dataset.status = msg;
+    els.fileLabel.title = msg;
+  }
+  // Visible feedback for export (status bar was removed)
+  let el = document.getElementById("export-status");
+  if (!el) {
+    el = document.createElement("p");
+    el.id = "export-status";
+    el.className = "stats muted";
+    const row = els.btnExportPdf?.closest("fieldset") || els.fileLabel?.parentElement;
+    row?.appendChild(el);
+  }
+  el.textContent = msg;
 }
 
 let viewZoom = 1;
@@ -1075,7 +1089,10 @@ function mapNxToSource(nx, edgeCurve, curveStart, innerCurve = 0, curveBlend = 0
   return sInner * (1 - w) + sEdge * w;
 }
 
-/** Vertical bow past curve-start: + up at sides, − down at sides (fraction of band). */
+/**
+ * Vertical bow magnitude past curve-start (fraction of band height).
+ * Sign convention at call sites: + → top sides up / bottom sides down; − flips.
+ */
 function verticalCurveAmount(nx, vertCurve, curveStart, curveBlend = 0) {
   const amt = Math.max(-1, Math.min(1, vertCurve));
   if (Math.abs(amt) <= 1e-6) return 0;
@@ -1531,8 +1548,13 @@ function downloadBlob(blob, filename) {
   const a = document.createElement("a");
   a.href = url;
   a.download = filename;
+  a.rel = "noopener";
+  a.style.display = "none";
+  document.body.appendChild(a);
   a.click();
-  URL.revokeObjectURL(url);
+  a.remove();
+  // Delay revoke so Safari can start the download
+  setTimeout(() => URL.revokeObjectURL(url), 2500);
 }
 
 function exportStamp() {
@@ -1545,7 +1567,8 @@ function exportBaseName() {
 
 /**
  * Map output (nx, ny) → source UV.
- * Edge curve stretch/condense + vertical up/down bow past curve-start; rotate optional.
+ * Edge curve stretch/condense + vertical bow past curve-start
+ * (top L/R one way, bottom L/R the opposite); rotate optional.
  */
 function sampleSourceUV(nx, ny, controls) {
   const rotateRad = (controls.rotateDeg * Math.PI) / 180;
@@ -1563,8 +1586,10 @@ function sampleSourceUV(nx, ny, controls) {
     controls.curveBlend,
   );
   let u = s * 0.5;
-  // +vertCurve lifts sides (sample higher on art); − drops sides
-  let v = ny - 0.5 - bow;
+  // +vertCurve: top L/R up, bottom L/R down (opposite bows); − flips
+  const denom = 1 + 2 * bow;
+  const texV = Math.abs(denom) > 1e-6 ? (ny + bow) / denom : ny;
+  let v = texV - 0.5;
   if (rotateRad) {
     const c = Math.cos(-rotateRad);
     const sn = Math.sin(-rotateRad);
@@ -1603,7 +1628,9 @@ function sourceUVToOutputXY(u, v, controls, outW, outH) {
     controls.curveStart,
     controls.curveBlend,
   );
-  const ny = vv + 0.5 + bow;
+  // Inverse of sampleSourceUV vert bow: top/bottom sides curve opposite ways
+  const srcV = vv + 0.5;
+  const ny = srcV - bow * (1 - 2 * srcV);
   const usableHalf = Math.max(0.01, 1 - controls.crop);
   return {
     x: ((nx * usableHalf + 1) / 2) * outW,
@@ -1984,93 +2011,135 @@ async function extractPdfVectorPaths(pdfBytes, pageNum) {
     return { x: p.x, y: pageH - p.y };
   };
 
-  const emitPath = (ops, args, paint) => {
-    const parts = [];
+  /** Current path (PDF path is NOT part of graphics state — survives save/restore). */
+  let pathParts = [];
+  let pathCtmScale = 1;
+  let pathX = 0;
+  let pathY = 0;
+
+  const appendConstructPath = (ops, coords) => {
+    if (!ops || !coords) return;
     let j = 0;
-    let x = 0;
-    let y = 0;
     for (let i = 0; i < ops.length; i++) {
       const op = ops[i] | 0;
       if (op === OPS.rectangle) {
-        const rx = args[j++];
-        const ry = args[j++];
-        const rw = args[j++];
-        const rh = args[j++];
+        const rx = coords[j++];
+        const ry = coords[j++];
+        const rw = coords[j++];
+        const rh = coords[j++];
         const p0 = toSvg(rx, ry);
         const p1 = toSvg(rx + rw, ry);
         const p2 = toSvg(rx + rw, ry + rh);
         const p3 = toSvg(rx, ry + rh);
-        parts.push(`M${fmt(p0.x)} ${fmt(p0.y)}`);
-        parts.push(`L${fmt(p1.x)} ${fmt(p1.y)}`);
-        parts.push(`L${fmt(p2.x)} ${fmt(p2.y)}`);
-        parts.push(`L${fmt(p3.x)} ${fmt(p3.y)} Z`);
-        x = rx;
-        y = ry;
+        pathParts.push(`M${fmt(p0.x)} ${fmt(p0.y)}`);
+        pathParts.push(`L${fmt(p1.x)} ${fmt(p1.y)}`);
+        pathParts.push(`L${fmt(p2.x)} ${fmt(p2.y)}`);
+        pathParts.push(`L${fmt(p3.x)} ${fmt(p3.y)} Z`);
+        pathX = rx;
+        pathY = ry;
       } else if (op === OPS.moveTo) {
-        x = args[j++];
-        y = args[j++];
-        const p = toSvg(x, y);
-        parts.push(`M${fmt(p.x)} ${fmt(p.y)}`);
+        pathX = coords[j++];
+        pathY = coords[j++];
+        const p = toSvg(pathX, pathY);
+        pathParts.push(`M${fmt(p.x)} ${fmt(p.y)}`);
       } else if (op === OPS.lineTo) {
-        x = args[j++];
-        y = args[j++];
-        const p = toSvg(x, y);
-        parts.push(`L${fmt(p.x)} ${fmt(p.y)}`);
+        pathX = coords[j++];
+        pathY = coords[j++];
+        const p = toSvg(pathX, pathY);
+        pathParts.push(`L${fmt(p.x)} ${fmt(p.y)}`);
       } else if (op === OPS.curveTo) {
-        const x1 = args[j++];
-        const y1 = args[j++];
-        const x2 = args[j++];
-        const y2 = args[j++];
-        x = args[j++];
-        y = args[j++];
+        const x1 = coords[j++];
+        const y1 = coords[j++];
+        const x2 = coords[j++];
+        const y2 = coords[j++];
+        pathX = coords[j++];
+        pathY = coords[j++];
         const c1 = toSvg(x1, y1);
         const c2 = toSvg(x2, y2);
-        const p = toSvg(x, y);
-        parts.push(`C${fmt(c1.x)} ${fmt(c1.y)} ${fmt(c2.x)} ${fmt(c2.y)} ${fmt(p.x)} ${fmt(p.y)}`);
+        const p = toSvg(pathX, pathY);
+        pathParts.push(`C${fmt(c1.x)} ${fmt(c1.y)} ${fmt(c2.x)} ${fmt(c2.y)} ${fmt(p.x)} ${fmt(p.y)}`);
       } else if (op === OPS.curveTo2) {
-        const x1 = x;
-        const y1 = y;
-        const x2 = args[j++];
-        const y2 = args[j++];
-        x = args[j++];
-        y = args[j++];
+        const x1 = pathX;
+        const y1 = pathY;
+        const x2 = coords[j++];
+        const y2 = coords[j++];
+        pathX = coords[j++];
+        pathY = coords[j++];
         const c1 = toSvg(x1, y1);
         const c2 = toSvg(x2, y2);
-        const p = toSvg(x, y);
-        parts.push(`C${fmt(c1.x)} ${fmt(c1.y)} ${fmt(c2.x)} ${fmt(c2.y)} ${fmt(p.x)} ${fmt(p.y)}`);
+        const p = toSvg(pathX, pathY);
+        pathParts.push(`C${fmt(c1.x)} ${fmt(c1.y)} ${fmt(c2.x)} ${fmt(c2.y)} ${fmt(p.x)} ${fmt(p.y)}`);
       } else if (op === OPS.curveTo3) {
-        const x1 = args[j++];
-        const y1 = args[j++];
-        x = args[j++];
-        y = args[j++];
+        const x1 = coords[j++];
+        const y1 = coords[j++];
+        pathX = coords[j++];
+        pathY = coords[j++];
         const c1 = toSvg(x1, y1);
-        const p = toSvg(x, y);
-        parts.push(`C${fmt(c1.x)} ${fmt(c1.y)} ${fmt(p.x)} ${fmt(p.y)} ${fmt(p.x)} ${fmt(p.y)}`);
+        const p = toSvg(pathX, pathY);
+        pathParts.push(`C${fmt(c1.x)} ${fmt(c1.y)} ${fmt(p.x)} ${fmt(p.y)} ${fmt(p.x)} ${fmt(p.y)}`);
       } else if (op === OPS.closePath) {
-        parts.push("Z");
+        pathParts.push("Z");
       }
     }
+    pathCtmScale = Math.hypot(ctm[0], ctm[1]) || 1;
+  };
 
-    const d = parts.join(" ");
-    if (!d) return;
-
-    const doFill = paint.fill;
-    const doStroke = paint.stroke;
-    const scale = Math.hypot(ctm[0], ctm[1]) || 1;
+  const paintCurrentPath = (paint) => {
+    const d = pathParts.join(" ");
+    pathParts = [];
+    if (!d || (!paint.fill && !paint.stroke)) return;
     paths.push({
       d,
-      fill: doFill ? fillColor : "none",
-      stroke: doStroke ? strokeColor : "none",
+      fill: paint.fill ? fillColor : "none",
+      stroke: paint.stroke ? strokeColor : "none",
       fillRule: paint.eo ? "evenodd" : "nonzero",
-      fillOpacity: doFill ? fillAlpha : 1,
-      strokeOpacity: doStroke ? strokeAlpha : 1,
-      strokeWidth: doStroke ? Math.max(0.15, lineWidth * scale) : 0,
+      fillOpacity: paint.fill ? fillAlpha : 1,
+      strokeOpacity: paint.stroke ? strokeAlpha : 1,
+      strokeWidth: paint.stroke ? Math.max(0.15, lineWidth * pathCtmScale) : 0,
     });
+  };
+
+  const paintFromOp = (fn) => {
+    if (
+      fn === OPS.fill ||
+      fn === OPS.eoFill ||
+      fn === OPS.stroke ||
+      fn === OPS.closeStroke ||
+      fn === OPS.fillStroke ||
+      fn === OPS.eoFillStroke ||
+      fn === OPS.closeFillStroke ||
+      fn === OPS.closeEOFillStroke
+    ) {
+      if (fn === OPS.closeStroke || fn === OPS.closeFillStroke || fn === OPS.closeEOFillStroke) {
+        pathParts.push("Z");
+      }
+      paintCurrentPath({
+        fill:
+          fn === OPS.fill ||
+          fn === OPS.eoFill ||
+          fn === OPS.fillStroke ||
+          fn === OPS.eoFillStroke ||
+          fn === OPS.closeFillStroke ||
+          fn === OPS.closeEOFillStroke,
+        stroke:
+          fn === OPS.stroke ||
+          fn === OPS.closeStroke ||
+          fn === OPS.fillStroke ||
+          fn === OPS.eoFillStroke ||
+          fn === OPS.closeFillStroke ||
+          fn === OPS.closeEOFillStroke,
+        eo: fn === OPS.eoFill || fn === OPS.eoFillStroke || fn === OPS.closeEOFillStroke,
+      });
+      return true;
+    }
+    return false;
   };
 
   for (let i = 0; i < opList.fnArray.length; i++) {
     const fn = opList.fnArray[i];
     const args = opList.argsArray[i];
+
+    if (paintFromOp(fn)) continue;
 
     switch (fn) {
       case OPS.save:
@@ -2142,55 +2211,13 @@ async function extractPdfVectorPaths(pdfBytes, pageNum) {
           }
         }
         break;
-      case OPS.constructPath: {
-        // Look ahead for paint op (allow color/gstate ops in between)
-        let paint = null;
-        for (let k = i + 1; k < Math.min(i + 12, opList.fnArray.length); k++) {
-          const next = opList.fnArray[k];
-          if (
-            next === OPS.fill ||
-            next === OPS.eoFill ||
-            next === OPS.stroke ||
-            next === OPS.closeStroke ||
-            next === OPS.fillStroke ||
-            next === OPS.eoFillStroke ||
-            next === OPS.closeFillStroke ||
-            next === OPS.closeEOFillStroke
-          ) {
-            paint = {
-              fill:
-                next === OPS.fill ||
-                next === OPS.eoFill ||
-                next === OPS.fillStroke ||
-                next === OPS.eoFillStroke ||
-                next === OPS.closeFillStroke ||
-                next === OPS.closeEOFillStroke,
-              stroke:
-                next === OPS.stroke ||
-                next === OPS.closeStroke ||
-                next === OPS.fillStroke ||
-                next === OPS.eoFillStroke ||
-                next === OPS.closeFillStroke ||
-                next === OPS.closeEOFillStroke,
-              eo: next === OPS.eoFill || next === OPS.eoFillStroke || next === OPS.closeEOFillStroke,
-            };
-            break;
-          }
-          if (
-            next === OPS.save ||
-            next === OPS.restore ||
-            next === OPS.transform ||
-            next === OPS.constructPath ||
-            next === OPS.endPath
-          ) {
-            break;
-          }
-        }
-        if (paint && (paint.fill || paint.stroke) && args?.[0] && args?.[1]) {
-          emitPath(args[0], args[1], paint);
-        }
+      case OPS.constructPath:
+        // args: [ops, coords, minMax?] — paint comes later (often after restore)
+        appendConstructPath(args?.[0], args?.[1]);
         break;
-      }
+      case OPS.endPath:
+        pathParts = [];
+        break;
       default:
         break;
     }
@@ -2932,7 +2959,9 @@ async function exportPdf() {
     );
   } catch (err) {
     console.error(err);
-    setStatus(err?.message || "PDF export failed");
+    const msg = err?.message || "PDF export failed";
+    setStatus(msg);
+    alert(msg);
   } finally {
     setExportBusy(false);
   }
