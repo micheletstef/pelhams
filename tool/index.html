@@ -23,6 +23,16 @@
               <option value="can330">330 ml aluminum can</option>
             </select>
           </div>
+          <div class="row" id="vessel-finish-row" hidden>
+            <label class="field grow">
+              Finish
+              <select id="vessel-finish">
+                <option value="white">White</option>
+                <option value="softMetal" selected>Soft metal</option>
+                <option value="glossyMetal">Glossy metal</option>
+              </select>
+            </label>
+          </div>
         </fieldset>
 
         <fieldset>
@@ -106,9 +116,12 @@
           </div>
         </fieldset>
 
-        <details class="fold" open>
+        <details class="fold" open id="fold-projection">
           <summary>
             <span>Projection</span>
+            <label class="summary-toggle" onclick="event.stopPropagation()">
+              <input id="projection-enabled" type="checkbox" checked /> On
+            </label>
             <button type="button" id="btn-reset-projection" class="btn-inline" onclick="event.stopPropagation()" title="Reset projection">Reset</button>
           </summary>
           <div class="slider-row">
@@ -138,8 +151,13 @@
           </div>
         </details>
 
-        <details class="fold">
-          <summary>Shading &amp; crop</summary>
+        <details class="fold" id="fold-shading">
+          <summary>
+            <span>Shading &amp; crop</span>
+            <label class="summary-toggle" onclick="event.stopPropagation()">
+              <input id="shading-enabled" type="checkbox" checked /> On
+            </label>
+          </summary>
           <div class="slider-row">
             <span class="slider-label">Edge fade</span>
             <input id="edge-fade" type="range" min="0" max="1" value="0" step="0.01" />
@@ -192,6 +210,6 @@
       </main>
     </div>
 
-    <script type="module" src="app.js?v=20260811-blend2"></script>
+    <script type="module" src="app.js?v=20260811-can-finish"></script>
   </body>
 </html>

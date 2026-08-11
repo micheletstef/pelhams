@@ -11,6 +11,8 @@ const els = {
   pdfPage: $("pdf-page"),
   sourceDpi: $("source-dpi"),
   vessel: $("vessel"),
+  vesselFinish: $("vessel-finish"),
+  vesselFinishRow: $("vessel-finish-row"),
   bottleStats: $("bottle-stats"),
   labelWidth: $("label-width"),
   labelHeight: $("label-height"),
@@ -20,6 +22,10 @@ const els = {
   btnNativeSize: $("btn-native-size"),
   labelArcReadout: $("label-arc-readout"),
   btnResetProjection: $("btn-reset-projection"),
+  foldProjection: $("fold-projection"),
+  foldShading: $("fold-shading"),
+  projectionEnabled: $("projection-enabled"),
+  shadingEnabled: $("shading-enabled"),
   edgeCurve: $("edge-curve"),
   innerCurve: $("inner-curve"),
   curveStart: $("curve-start"),
@@ -99,23 +105,41 @@ const VESSELS = {
     kind: "can",
     diameter: 66.2,
     height: 115.2,
-    // Parallel body band on SM_Aluminum_Can_HR.png
+    // Parallel body band on SM_PEL_* can mockups (540×1024)
     labelPanel: 91,
-    frontSrc: "assets/can-mockup-hr.png",
+    frontSrc: "assets/can-soft-metal.jpg",
     frontNote: "Standard 330 ml can mockup",
-    bodyTopFrac: 0.132,
-    bodyBotFrac: 0.924,
+    bodyTopFrac: 0.148,
+    bodyBotFrac: 0.922,
     // Full wrap ≈ π × Ø
     defaultLabelWidth: 208,
     defaultLabelHeight: 91,
-    defaultOutW: 794,
-    defaultOutH: 1504,
+    defaultOutW: 540,
+    defaultOutH: 1024,
+    defaultFinish: "softMetal",
+    finishes: {
+      white: {
+        label: "White",
+        src: "assets/can-white.jpg",
+        highlightStrength: 0.25,
+      },
+      softMetal: {
+        label: "Soft metal",
+        src: "assets/can-soft-metal.jpg",
+        highlightStrength: 0.5,
+      },
+      glossyMetal: {
+        label: "Glossy metal",
+        src: "assets/can-glossy-metal.jpg",
+        highlightStrength: 0.7,
+      },
+    },
     mockup: {
-      src: "assets/can-mockup-hr.png",
-      bodyTopFrac: 0.132,
-      bodyBotFrac: 0.924,
-      bodyLeftFrac: 0.001,
-      bodyRightFrac: 0.997,
+      src: "assets/can-soft-metal.jpg",
+      bodyTopFrac: 0.148,
+      bodyBotFrac: 0.922,
+      bodyLeftFrac: 0.002,
+      bodyRightFrac: 0.998,
       highlightStrength: 0.5,
       bgKnockoutLum: 14,
     },
@@ -155,16 +179,68 @@ function activeVessel() {
   return VESSELS[els.vessel?.value] || VESSELS[DEFAULT_VESSEL_ID];
 }
 
+function vesselHasFinishes(vessel = activeVessel()) {
+  return Boolean(vessel?.finishes && Object.keys(vessel.finishes).length);
+}
+
+function activeFinishId(vessel = activeVessel()) {
+  if (!vesselHasFinishes(vessel)) return null;
+  const id = els.vesselFinish?.value;
+  if (id && vessel.finishes[id]) return id;
+  if (vessel.defaultFinish && vessel.finishes[vessel.defaultFinish]) {
+    return vessel.defaultFinish;
+  }
+  return Object.keys(vessel.finishes)[0];
+}
+
+function syncVesselFinishUi(vessel = activeVessel()) {
+  const row = els.vesselFinishRow;
+  const select = els.vesselFinish;
+  if (!row || !select) return;
+  const hasFinishes = vesselHasFinishes(vessel);
+  row.hidden = !hasFinishes;
+  if (!hasFinishes) return;
+
+  const finishIds = Object.keys(vessel.finishes);
+  const optionsMatch =
+    select.options.length === finishIds.length &&
+    finishIds.every((id, i) => select.options[i]?.value === id);
+  if (!optionsMatch) {
+    select.innerHTML = finishIds
+      .map((id) => {
+        const label = vessel.finishes[id].label || id;
+        return `<option value="${id}">${label}</option>`;
+      })
+      .join("");
+  }
+
+  const next = activeFinishId(vessel);
+  if (next && select.value !== next) select.value = next;
+}
+
 function activeMockup() {
-  return activeVessel().mockup;
+  const vessel = activeVessel();
+  const base = vessel.mockup;
+  const finishId = activeFinishId(vessel);
+  if (!finishId) return base;
+  const finish = vessel.finishes[finishId];
+  return {
+    ...base,
+    src: finish.src,
+    highlightStrength: finish.highlightStrength ?? base.highlightStrength,
+    bgKnockoutLum: finish.bgKnockoutLum ?? base.bgKnockoutLum,
+  };
 }
 
 const DEFAULTS = {
   vessel: DEFAULT_VESSEL_ID,
+  vesselFinish: "softMetal",
   labelWidth: 120,
   labelHeight: 105,
   lockLabelSize: true,
   labelScale: 1,
+  projectionEnabled: true,
+  shadingEnabled: true,
   edgeCurve: 0,
   innerCurve: 0,
   curveStart: 50,
@@ -339,12 +415,25 @@ function applyVesselLabelDefaults(vessel = activeVessel()) {
 async function switchVessel(vesselId, { applyLabelDefaults = true } = {}) {
   if (!VESSELS[vesselId]) vesselId = DEFAULT_VESSEL_ID;
   els.vessel.value = vesselId;
+  syncVesselFinishUi();
   if (applyLabelDefaults) applyVesselLabelDefaults();
   setStatus(`Loading ${activeVessel().name}…`);
   await loadMockup();
   saveSettings();
   scheduleRender();
   setStatus(`Ready — ${activeVessel().name}`);
+}
+
+async function switchVesselFinish(finishId) {
+  const vessel = activeVessel();
+  if (!vesselHasFinishes(vessel)) return;
+  if (!vessel.finishes[finishId]) finishId = activeFinishId(vessel);
+  if (els.vesselFinish) els.vesselFinish.value = finishId;
+  setStatus(`Loading ${vessel.finishes[finishId]?.label || finishId} finish…`);
+  await loadMockup();
+  saveSettings();
+  scheduleRender();
+  setStatus(`Ready — ${vessel.name} · ${vessel.finishes[finishId]?.label || finishId}`);
 }
 
 function rasterizeImage(img) {
@@ -551,10 +640,13 @@ function bottleGeometry(controls) {
 function collectSettings() {
   return {
     vessel: els.vessel.value,
+    vesselFinish: els.vesselFinish?.value || DEFAULTS.vesselFinish,
     labelWidth: els.labelWidth.value,
     labelHeight: els.labelHeight.value,
     lockLabelSize: els.lockLabelSize.checked,
     labelScale: els.labelScale.value,
+    projectionEnabled: els.projectionEnabled?.checked ?? true,
+    shadingEnabled: els.shadingEnabled?.checked ?? true,
     edgeCurve: els.edgeCurve.value,
     innerCurve: els.innerCurve.value,
     curveStart: els.curveStart.value,
@@ -588,10 +680,17 @@ function applySettings(s) {
     if (typeof s[key] === "boolean" && el) el.checked = s[key];
   };
   if (s.vessel && VESSELS[s.vessel]) els.vessel.value = s.vessel;
+  syncVesselFinishUi();
+  if (s.vesselFinish && els.vesselFinish) {
+    const vessel = activeVessel();
+    if (vessel.finishes?.[s.vesselFinish]) els.vesselFinish.value = s.vesselFinish;
+  }
   setVal(els.labelWidth, "labelWidth");
   setVal(els.labelHeight, "labelHeight");
   setCheck(els.lockLabelSize, "lockLabelSize");
   setVal(els.labelScale, "labelScale");
+  setCheck(els.projectionEnabled, "projectionEnabled");
+  setCheck(els.shadingEnabled, "shadingEnabled");
   setVal(els.edgeCurve, "edgeCurve");
   setVal(els.innerCurve, "innerCurve");
   setVal(els.curveStart, "curveStart");
@@ -603,6 +702,7 @@ function applySettings(s) {
   setVal(els.edgeFade, "edgeFade");
   setVal(els.fadeStart, "fadeStart");
   setVal(els.crop, "crop");
+  syncSectionToggles();
   setCheck(els.showMockup, "showMockup");
   setCheck(els.knockoutWhite, "knockoutWhite");
   setVal(els.artColor, "artColor");
@@ -637,23 +737,42 @@ function loadSettings() {
   }
 }
 
+function syncSectionToggles() {
+  const projOn = els.projectionEnabled?.checked ?? true;
+  const shadeOn = els.shadingEnabled?.checked ?? true;
+  els.foldProjection?.classList.toggle("is-disabled", !projOn);
+  els.foldShading?.classList.toggle("is-disabled", !shadeOn);
+}
+
 function readControls() {
+  const projectionEnabled = els.projectionEnabled?.checked ?? DEFAULTS.projectionEnabled;
+  const shadingEnabled = els.shadingEnabled?.checked ?? DEFAULTS.shadingEnabled;
   return {
     labelWidth: Number(els.labelWidth.value) || DEFAULTS.labelWidth,
     labelHeight: Number(els.labelHeight.value) || DEFAULTS.labelHeight,
     lockLabelSize: els.lockLabelSize?.checked ?? DEFAULTS.lockLabelSize,
     labelScale: Math.max(0.05, Number(els.labelScale?.value) || DEFAULTS.labelScale),
-    edgeCurve: Math.max(-2, Math.min(2, Number(els.edgeCurve?.value) || 0)),
-    innerCurve: Math.max(-2, Math.min(2, Number(els.innerCurve?.value) || 0)),
+    projectionEnabled,
+    shadingEnabled,
+    edgeCurve: projectionEnabled
+      ? Math.max(-2, Math.min(2, Number(els.edgeCurve?.value) || 0))
+      : 0,
+    innerCurve: projectionEnabled
+      ? Math.max(-2, Math.min(2, Number(els.innerCurve?.value) || 0))
+      : 0,
     curveStart: Math.max(0, Math.min(1, (Number(els.curveStart?.value) || DEFAULTS.curveStart) / 100)),
-    curveBlend: Math.max(0, Math.min(1, (Number(els.curveBlend?.value) || DEFAULTS.curveBlend) / 100)),
-    vertCurve: Math.max(-1, Math.min(1, Number(els.vertCurve?.value) || 0)),
+    curveBlend: projectionEnabled
+      ? Math.max(0, Math.min(1, (Number(els.curveBlend?.value) || DEFAULTS.curveBlend) / 100))
+      : 0,
+    vertCurve: projectionEnabled
+      ? Math.max(-1, Math.min(1, Number(els.vertCurve?.value) || 0))
+      : 0,
     rotateDeg: Number(els.rotate.value),
     offsetX: Number(els.offsetX.value) / 100,
     offsetY: Number(els.offsetY.value) / 100,
-    edgeFade: Number(els.edgeFade.value),
+    edgeFade: shadingEnabled ? Number(els.edgeFade.value) : 0,
     fadeStart: Number(els.fadeStart.value) / 100,
-    crop: Number(els.crop.value) / 100,
+    crop: shadingEnabled ? Number(els.crop.value) / 100 : 0,
     clipCylinder: true,
     showMockup: els.showMockup.checked,
     knockoutWhite: els.knockoutWhite.checked,
@@ -670,6 +789,7 @@ function readControls() {
 }
 
 function updateLabels() {
+  syncSectionToggles();
   const c = readControls();
   const g = bottleGeometry(c);
   if (els.edgeCurveVal) {
@@ -700,8 +820,10 @@ function updateLabels() {
   if (els.outH) els.outH.disabled = !mockupExport;
   syncLabelSizeLockUi();
   const vessel = activeVessel();
+  const finishId = activeFinishId(vessel);
+  const finishLabel = finishId ? vessel.finishes[finishId]?.label : null;
   els.bottleStats.textContent =
-    `${vessel.name} · Ø${vessel.diameter} × ${vessel.height} mm · circ. ${g.circumference.toFixed(1)} mm`;
+    `${vessel.name}${finishLabel ? ` · ${finishLabel}` : ""} · Ø${vessel.diameter} × ${vessel.height} mm · circ. ${g.circumference.toFixed(1)} mm`;
   const nativeNote = sourceNativeMm
     ? ` · native ${sourceNativeMm.w}×${sourceNativeMm.h}`
     : "";
@@ -1069,7 +1191,9 @@ function drawGuides(ctx, width, height, controls) {
   ctx.strokeRect(left, 0, bandW, height);
   ctx.restore();
   drawCurveGuides(ctx, left, 0, bandW, height, controls.curveStart, controls.curveBlend, lwGuide);
-  drawFadeStartGuides(ctx, left, 0, bandW, height, controls.fadeStart, lwGuide);
+  if (controls.shadingEnabled) {
+    drawFadeStartGuides(ctx, left, 0, bandW, height, controls.fadeStart, lwGuide);
+  }
 }
 
 function mockupBodyRect(width, height, controls) {
@@ -1242,7 +1366,9 @@ function drawGuidesOnMockup(ctx, width, height, controls) {
     controls.curveBlend,
     lwGuide,
   );
-  drawFadeStartGuides(ctx, rect.lx, rect.ly, rect.labelW, rect.labelH, controls.fadeStart, lwGuide);
+  if (controls.shadingEnabled) {
+    drawFadeStartGuides(ctx, rect.lx, rect.ly, rect.labelW, rect.labelH, controls.fadeStart, lwGuide);
+  }
 }
 
 function downloadBlob(blob, filename) {
@@ -1510,7 +1636,7 @@ function drawFrontView(controls) {
 
   els.frontview.innerHTML = `
     <div class="bottle-diagram">
-      <img src="${vessel.frontSrc}" alt="${vessel.name} outline" draggable="false" />
+      <img src="${activeMockup().src || vessel.frontSrc}" alt="${vessel.name} outline" draggable="false" />
       <svg class="label-overlay" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
         <rect x="${inset}" y="${bodyTop.toFixed(2)}" width="${(100 - inset * 2).toFixed(2)}" height="${bodyH.toFixed(2)}"
           fill="none" stroke="#999" stroke-width="0.4" stroke-dasharray="1.5 1.5" vector-effect="non-scaling-stroke"/>
@@ -2854,11 +2980,13 @@ async function reloadPdfPage() {
 
 /** Reset projection to flat (no edge / inner / vert curve). */
 function resetProjection() {
+  if (els.projectionEnabled) els.projectionEnabled.checked = DEFAULTS.projectionEnabled;
   els.edgeCurve.value = String(DEFAULTS.edgeCurve);
   els.innerCurve.value = String(DEFAULTS.innerCurve);
   els.curveStart.value = String(DEFAULTS.curveStart);
   els.curveBlend.value = String(DEFAULTS.curveBlend);
   els.vertCurve.value = String(DEFAULTS.vertCurve);
+  syncSectionToggles();
 }
 
 function resetControls() {
@@ -2870,6 +2998,7 @@ function resetControls() {
     els.labelHeight.value = vessel.defaultLabelHeight;
   }
   resetProjection();
+  if (els.shadingEnabled) els.shadingEnabled.checked = DEFAULTS.shadingEnabled;
   els.rotate.value = DEFAULTS.rotate;
   els.offsetX.value = DEFAULTS.offsetX;
   els.offsetY.value = DEFAULTS.offsetY;
@@ -2877,6 +3006,7 @@ function resetControls() {
   els.fadeStart.value = DEFAULTS.fadeStart;
   els.crop.value = DEFAULTS.crop;
   els.showMockup.checked = DEFAULTS.showMockup;
+  syncSectionToggles();
   els.knockoutWhite.checked = DEFAULTS.knockoutWhite;
   els.artColor.value = DEFAULTS.artColor;
   els.paperColor.value = DEFAULTS.paperColor;
@@ -2933,10 +3063,16 @@ function bindUi() {
     switchVessel(els.vessel.value, { applyLabelDefaults: true });
   });
 
+  els.vesselFinish?.addEventListener("change", () => {
+    switchVesselFinish(els.vesselFinish.value);
+  });
+
   const live = [
     els.labelWidth,
     els.labelHeight,
     els.labelScale,
+    els.projectionEnabled,
+    els.shadingEnabled,
     els.edgeCurve,
     els.innerCurve,
     els.curveStart,
@@ -3017,6 +3153,8 @@ function bindUi() {
 }
 
 loadSettings();
+syncVesselFinishUi();
+syncSectionToggles();
 loadMockup().then(() => {
   bindUi();
   setStatus(`Upload a PDF or SVG — it will wrap onto the ${activeVessel().kind} mockup`);

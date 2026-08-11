@@ -73,9 +73,17 @@ legend {
 }
 
 .summary-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
   font-weight: 500;
   color: #444;
   cursor: pointer;
+  white-space: nowrap;
+}
+
+.summary-toggle input {
+  margin: 0;
 }
 
 .btn-inline {
