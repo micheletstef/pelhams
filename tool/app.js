@@ -576,7 +576,7 @@ function loadSettings() {
   }
 }
 
-/** Flat / identity projection — used when Projection toggle is off. */
+/** Flat / identity projection — used when Projection toggle is off or Reset. */
 const PROJECTION_OFF = {
   wrap: 0,
   edgeSquash: 1,
@@ -609,6 +609,24 @@ function syncProjectionUi() {
   for (const el of projectionControls()) {
     if (el) el.disabled = !on;
   }
+}
+
+/** True when knobs match Reset — artwork must stay 1:1 (no pad/cylinder/crop). */
+function isNeutralProjection(controls) {
+  return (
+    (controls.wrap || 0) <= 0.001 &&
+    Math.abs((controls.edgeSquash || 1) - 1) <= 0.001 &&
+    Math.abs(controls.hCurve || 0) <= 0.001 &&
+    (controls.perspective || 0) <= 0.001 &&
+    Math.abs((controls.scaleX || 1) - 1) <= 0.001 &&
+    Math.abs((controls.scaleY || 1) - 1) <= 0.001 &&
+    Math.abs(controls.offsetX || 0) <= 0.001
+  );
+}
+
+/** Flat 1:1 sampling — Projection off, or On with Reset/neutral knobs. */
+function isFlatArtwork(controls) {
+  return !controls.projectionEnabled || isNeutralProjection(controls);
 }
 
 function readControls() {
@@ -871,7 +889,7 @@ function warpToImageData(src, controls, width, height) {
   const out = new ImageData(width, height);
   const dst = out.data;
 
-  const flat = !controls.projectionEnabled;
+  const flat = isFlatArtwork(controls);
   const crop = flat ? 0 : controls.crop;
   const usableHalf = Math.max(0.01, 1 - crop);
   const clip = flat ? false : controls.clipCylinder;
@@ -1185,12 +1203,12 @@ const ART_V_PAD = 0.03;
  *   ny = v*(1-2h) + h   where h = horizontalCurveOffset(nx)
  * so top/bottom edges sit lower/higher at the sides (∩ top, ∪ bottom).
  *
- * When projection is off: true 1:1 (plus optional rotate) — no cylinder, pad, or bow.
+ * Flat / Reset: true 1:1 (plus optional rotate) — no cylinder, pad, or bow.
  */
 function sampleSourceUV(nx, ny, controls) {
   const rotateRad = (controls.rotateDeg * Math.PI) / 180;
 
-  if (!controls.projectionEnabled) {
+  if (isFlatArtwork(controls)) {
     // nx, ny in label rect → UV. Rotate around center only.
     let u = nx * 0.5;
     let v = ny - 0.5;
@@ -1230,7 +1248,7 @@ function sampleSourceUV(nx, ny, controls) {
 function sourceUVToOutputXY(u, v, controls, outW, outH) {
   const rotateRad = (controls.rotateDeg * Math.PI) / 180;
 
-  if (!controls.projectionEnabled) {
+  if (isFlatArtwork(controls)) {
     let uu = u - 0.5;
     let vv = v - 0.5;
     if (rotateRad) {
