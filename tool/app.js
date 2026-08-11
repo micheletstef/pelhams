@@ -584,6 +584,9 @@ const PROJECTION_OFF = {
   scaleX: 1,
   scaleY: 1,
   offsetX: 0,
+  crop: 0,
+  edgeFade: 0,
+  clipCylinder: false,
 };
 
 function projectionControls() {
@@ -618,8 +621,12 @@ function readControls() {
         scaleX: Number(els.scaleX.value),
         scaleY: Number(els.scaleY.value),
         offsetX: Number(els.offsetX.value) / 100,
+        edgeFade: Number(els.edgeFade.value),
+        fadeStart: Number(els.fadeStart.value) / 100,
+        crop: Number(els.crop.value) / 100,
+        clipCylinder: els.clipCylinder.checked,
       }
-    : { ...PROJECTION_OFF };
+    : { ...PROJECTION_OFF, fadeStart: Number(els.fadeStart.value) / 100 };
 
   return {
     labelWidth: Number(els.labelWidth.value) || DEFAULTS.labelWidth,
@@ -630,10 +637,6 @@ function readControls() {
     ...projection,
     rotateDeg: Number(els.rotate.value),
     offsetY: Number(els.offsetY.value) / 100,
-    edgeFade: Number(els.edgeFade.value),
-    fadeStart: Number(els.fadeStart.value) / 100,
-    crop: Number(els.crop.value) / 100,
-    clipCylinder: els.clipCylinder.checked,
     showGuides: els.showGuides.checked,
     showMockup: els.showMockup.checked,
     matchAspect: els.matchAspect.checked,
@@ -867,8 +870,10 @@ function warpToImageData(src, controls, width, height) {
   const out = new ImageData(width, height);
   const dst = out.data;
 
-  const crop = controls.crop;
+  const flat = !controls.projectionEnabled;
+  const crop = flat ? 0 : controls.crop;
   const usableHalf = Math.max(0.01, 1 - crop);
+  const clip = flat ? false : controls.clipCylinder;
 
   const [br, bg, bb] = hexToRgb(controls.bgColor);
   const solidBg = controls.bgMode === "solid";
@@ -881,7 +886,7 @@ function warpToImageData(src, controls, width, height) {
       const nxRaw = ((px + 0.5) / width) * 2 - 1; // -1..1 across canvas
       const absX = Math.abs(nxRaw);
 
-      if (controls.clipCylinder && absX > usableHalf) {
+      if (clip && absX > usableHalf) {
         if (solidBg) {
           dst[i] = br;
           dst[i + 1] = bg;
@@ -891,8 +896,8 @@ function warpToImageData(src, controls, width, height) {
         continue;
       }
 
-      // x on the cylinder face (-1..1)
-      const nx = nxRaw / usableHalf;
+      // x on the cylinder face (-1..1); flat mode uses the rect as-is
+      const nx = flat ? nxRaw : nxRaw / usableHalf;
       if (Math.abs(nx) > 1) {
         if (solidBg) {
           dst[i] = br;
@@ -909,7 +914,9 @@ function warpToImageData(src, controls, width, height) {
       const sy = v * sh;
       const rgba = styleArtworkSample(sampleBilinear(srcPixels, sw, sh, sx, sy), controls);
 
-      let a = rgba[3] * edgeFadeAlpha(nx, controls.edgeFade, controls.fadeStart);
+      let a = flat
+        ? rgba[3]
+        : rgba[3] * edgeFadeAlpha(nx, controls.edgeFade, controls.fadeStart);
 
       if (solidBg) {
         const alpha = a / 255;
@@ -1176,10 +1183,28 @@ const ART_V_PAD = 0.03;
  * Horiz. curve matches the front-view label bow:
  *   ny = v*(1-2h) + h   where h = horizontalCurveOffset(nx)
  * so top/bottom edges sit lower/higher at the sides (∩ top, ∪ bottom).
+ *
+ * When projection is off: true 1:1 (plus optional rotate) — no cylinder, pad, or bow.
  */
 function sampleSourceUV(nx, ny, controls) {
-  const g = bottleGeometry(controls);
   const rotateRad = (controls.rotateDeg * Math.PI) / 180;
+
+  if (!controls.projectionEnabled) {
+    // nx, ny in label rect → UV. Rotate around center only.
+    let u = nx * 0.5;
+    let v = ny - 0.5;
+    if (rotateRad) {
+      const c = Math.cos(-rotateRad);
+      const s = Math.sin(-rotateRad);
+      const ru = u * c - v * s;
+      const rv = u * s + v * c;
+      u = ru;
+      v = rv;
+    }
+    return { u: u + 0.5, v: v + 0.5, theta: nx };
+  }
+
+  const g = bottleGeometry(controls);
   const theta = screenXToTheta(nx, controls.wrap, controls.edgeSquash, g.labelArcRad);
   // Label centered at rotate=0 covers [-α/2, α/2]
   const u = (theta - rotateRad) / (g.labelArcRad / controls.scaleX) + 0.5 + controls.offsetX;
@@ -1202,8 +1227,30 @@ function sampleSourceUV(nx, ny, controls) {
 
 /** Inverse: source UV → output pixel XY (for vector path warping). */
 function sourceUVToOutputXY(u, v, controls, outW, outH) {
-  const g = bottleGeometry(controls);
   const rotateRad = (controls.rotateDeg * Math.PI) / 180;
+
+  if (!controls.projectionEnabled) {
+    let uu = u - 0.5;
+    let vv = v - 0.5;
+    if (rotateRad) {
+      const c = Math.cos(rotateRad);
+      const s = Math.sin(rotateRad);
+      const ru = uu * c - vv * s;
+      const rv = uu * s + vv * c;
+      uu = ru;
+      vv = rv;
+    }
+    const nx = uu * 2;
+    const ny = vv + 0.5;
+    return {
+      x: ((nx + 1) / 2) * outW,
+      y: ny * outH,
+      nx,
+      fade: 1,
+    };
+  }
+
+  const g = bottleGeometry(controls);
   const theta = (u - 0.5 - controls.offsetX) * (g.labelArcRad / controls.scaleX) + rotateRad;
   const nx = thetaToScreenX(theta, controls.wrap, controls.edgeSquash, g.labelArcRad);
 
