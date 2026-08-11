@@ -23,10 +23,12 @@ const els = {
   edgeCurve: $("edge-curve"),
   innerCurve: $("inner-curve"),
   curveStart: $("curve-start"),
+  curveBlend: $("curve-blend"),
   vertCurve: $("vert-curve"),
   edgeCurveVal: $("edge-curve-val"),
   innerCurveVal: $("inner-curve-val"),
   curveStartVal: $("curve-start-val"),
+  curveBlendVal: $("curve-blend-val"),
   vertCurveVal: $("vert-curve-val"),
   rotate: $("rotate"),
   offsetX: $("offset-x"),
@@ -169,6 +171,7 @@ const DEFAULTS = {
   edgeCurve: 0,
   innerCurve: 0,
   curveStart: 50,
+  curveBlend: 0,
   vertCurve: 0,
   rotate: 0,
   offsetX: 0,
@@ -441,11 +444,15 @@ let viewPanY = 0;
 const VIEW_ZOOM_MIN = 0.2;
 const VIEW_ZOOM_MAX = 8;
 
+function viewIsTransformed() {
+  return Math.abs(viewZoom - 1) > 0.001 || Math.abs(viewPanX) > 0.5 || Math.abs(viewPanY) > 0.5;
+}
+
 function applyViewTransform() {
   if (!els.viewportStage) return;
   els.viewportStage.style.transform = `translate(${viewPanX}px, ${viewPanY}px) scale(${viewZoom})`;
   if (els.viewport) {
-    els.viewport.classList.toggle("is-zoomed", viewZoom > 1.001);
+    els.viewport.classList.toggle("is-zoomed", viewIsTransformed());
     els.viewport.classList.toggle("is-panning", Boolean(els.viewport.dataset.panning));
   }
 }
@@ -466,13 +473,7 @@ function bindViewerZoom() {
     (e) => {
       e.preventDefault();
       const factor = e.deltaY > 0 ? 1 / 1.12 : 1.12;
-      const next = Math.min(VIEW_ZOOM_MAX, Math.max(VIEW_ZOOM_MIN, viewZoom * factor));
-      viewZoom = next;
-      if (viewZoom <= 1.001) {
-        viewZoom = 1;
-        viewPanX = 0;
-        viewPanY = 0;
-      }
+      viewZoom = Math.min(VIEW_ZOOM_MAX, Math.max(VIEW_ZOOM_MIN, viewZoom * factor));
       applyViewTransform();
     },
     { passive: false },
@@ -487,7 +488,7 @@ function bindViewerZoom() {
   let lastY = 0;
 
   vp.addEventListener("pointerdown", (e) => {
-    if (e.button !== 0 || viewZoom <= 1.001) return;
+    if (e.button !== 0 || !viewIsTransformed()) return;
     dragging = true;
     lastX = e.clientX;
     lastY = e.clientY;
@@ -563,6 +564,7 @@ function collectSettings() {
     edgeCurve: els.edgeCurve.value,
     innerCurve: els.innerCurve.value,
     curveStart: els.curveStart.value,
+    curveBlend: els.curveBlend.value,
     vertCurve: els.vertCurve.value,
     rotate: els.rotate.value,
     offsetX: els.offsetX.value,
@@ -602,6 +604,7 @@ function applySettings(s) {
   setVal(els.edgeCurve, "edgeCurve");
   setVal(els.innerCurve, "innerCurve");
   setVal(els.curveStart, "curveStart");
+  setVal(els.curveBlend, "curveBlend");
   setVal(els.vertCurve, "vertCurve");
   setVal(els.rotate, "rotate");
   setVal(els.offsetX, "offsetX");
@@ -655,6 +658,7 @@ function readControls() {
     edgeCurve: Math.max(-2, Math.min(2, Number(els.edgeCurve?.value) || 0)),
     innerCurve: Math.max(-2, Math.min(2, Number(els.innerCurve?.value) || 0)),
     curveStart: Math.max(0, Math.min(1, (Number(els.curveStart?.value) || DEFAULTS.curveStart) / 100)),
+    curveBlend: Math.max(0, Math.min(1, (Number(els.curveBlend?.value) || DEFAULTS.curveBlend) / 100)),
     vertCurve: Math.max(-1, Math.min(1, Number(els.vertCurve?.value) || 0)),
     rotateDeg: Number(els.rotate.value),
     offsetX: Number(els.offsetX.value) / 100,
@@ -684,15 +688,14 @@ function updateLabels() {
   const g = bottleGeometry(c);
   if (els.edgeCurveVal) {
     const pct = Math.round(c.edgeCurve * 100);
-    els.edgeCurveVal.textContent =
-      pct === 0 ? "0%" : pct > 0 ? `+${pct}% stretch` : `${pct}% condense`;
+    els.edgeCurveVal.textContent = pct === 0 ? "0%" : pct > 0 ? `+${pct}%` : `${pct}%`;
   }
   if (els.innerCurveVal) {
     const pct = Math.round(c.innerCurve * 100);
-    els.innerCurveVal.textContent =
-      pct === 0 ? "0%" : pct > 0 ? `+${pct}% stretch` : `${pct}% condense`;
+    els.innerCurveVal.textContent = pct === 0 ? "0%" : pct > 0 ? `+${pct}%` : `${pct}%`;
   }
   if (els.curveStartVal) els.curveStartVal.textContent = `${Math.round(c.curveStart * 100)}%`;
+  if (els.curveBlendVal) els.curveBlendVal.textContent = `${Math.round(c.curveBlend * 100)}%`;
   if (els.vertCurveVal) {
     const pct = Math.round(c.vertCurve * 100);
     els.vertCurveVal.textContent =
@@ -742,13 +745,27 @@ function applyCurveWarp(t, amt) {
   return tWarp;
 }
 
+function smoothstep01(t) {
+  const u = Math.max(0, Math.min(1, t));
+  return u * u * (3 - 2 * u);
+}
+
 /**
- * Map label x (-1..1) → source x (-1..1).
- * Inside ±curveStart: innerCurve · Outside: edgeCurve
- *   > 0 → stretch (cylinder asin foreshortening)
- *   < 0 → condense (inverse sin expansion)
+ * How strongly the outer (edge) curve is active at |nx|.
+ * 0 at/inside curve-start; with blend, ramps up over that fraction of the outer band.
  */
-function mapNxToSource(nx, edgeCurve, curveStart, innerCurve = 0) {
+function edgeRegionWeight(ax, curveStart, curveBlend) {
+  const start = Math.max(0, Math.min(0.999, curveStart));
+  const a = Math.max(0, Math.min(1, ax));
+  if (a <= start) return 0;
+  const blend = Math.max(0, Math.min(1, curveBlend));
+  if (blend <= 1e-6) return 1;
+  const t = (a - start) / Math.max(1e-6, 1 - start);
+  return smoothstep01(t / blend);
+}
+
+/** Hard-split map: inner inside ±start, edge outside. */
+function mapNxToSourceHard(nx, edgeCurve, curveStart, innerCurve) {
   const x = Math.max(-1, Math.min(1, nx));
   const start = Math.max(0, Math.min(0.999, curveStart));
   const ax = Math.abs(x);
@@ -764,25 +781,43 @@ function mapNxToSource(nx, edgeCurve, curveStart, innerCurve = 0) {
   return sign * (start + (1 - start) * tWarp);
 }
 
+/**
+ * Map label x (-1..1) → source x (-1..1).
+ * Inside ±curveStart: innerCurve · Outside: edgeCurve
+ * curveBlend softens the outer curve onset past the start lines (0 = hard, 1 = full outer ramp).
+ */
+function mapNxToSource(nx, edgeCurve, curveStart, innerCurve = 0, curveBlend = 0) {
+  const x = Math.max(-1, Math.min(1, nx));
+  const w = edgeRegionWeight(Math.abs(x), curveStart, curveBlend);
+  if (w <= 1e-6) return mapNxToSourceHard(x, 0, curveStart, innerCurve);
+  if (w >= 1 - 1e-6) return mapNxToSourceHard(x, edgeCurve, curveStart, innerCurve);
+  const sInner = mapNxToSourceHard(x, 0, curveStart, innerCurve);
+  const sEdge = mapNxToSourceHard(x, edgeCurve, curveStart, innerCurve);
+  return sInner * (1 - w) + sEdge * w;
+}
+
 /** Vertical bow past curve-start: + up at sides, − down at sides (fraction of band). */
-function verticalCurveAmount(nx, vertCurve, curveStart) {
+function verticalCurveAmount(nx, vertCurve, curveStart, curveBlend = 0) {
   const amt = Math.max(-1, Math.min(1, vertCurve));
   if (Math.abs(amt) <= 1e-6) return 0;
   const ax = Math.abs(Math.max(-1, Math.min(1, nx)));
   const start = Math.max(0, Math.min(0.999, curveStart));
-  if (ax <= start) return 0;
-  const t = (ax - start) / (1 - start);
+  const w = edgeRegionWeight(ax, start, curveBlend);
+  if (w <= 1e-6) return 0;
+  const t = (ax - start) / Math.max(1e-6, 1 - start);
   const smooth = t * t * (3 - 2 * t);
-  return amt * 0.22 * smooth;
+  // With no blend, keep the soft rise across the outer band; with blend, onset follows w.
+  const rise = curveBlend <= 1e-6 ? smooth : w;
+  return amt * 0.22 * rise;
 }
 
-function mapSourceToNx(s, edgeCurve, curveStart, innerCurve = 0) {
+function mapSourceToNx(s, edgeCurve, curveStart, innerCurve = 0, curveBlend = 0) {
   // Inverse of mapNxToSource via binary search
   let lo = -1;
   let hi = 1;
   for (let i = 0; i < 28; i++) {
     const mid = (lo + hi) / 2;
-    if (mapNxToSource(mid, edgeCurve, curveStart, innerCurve) < s) lo = mid;
+    if (mapNxToSource(mid, edgeCurve, curveStart, innerCurve, curveBlend) < s) lo = mid;
     else hi = mid;
   }
   return (lo + hi) / 2;
@@ -971,6 +1006,47 @@ function warpToImageData(src, controls, width, height) {
   }
 
   return out;
+}
+
+const EXPORT_WARP_SSAA = 2;
+const EXPORT_WARP_MAX_EDGE = 8192;
+
+function imageDataToCanvas(image) {
+  const c = document.createElement("canvas");
+  c.width = image.width;
+  c.height = image.height;
+  c.getContext("2d").putImageData(image, 0, 0);
+  return c;
+}
+
+/** High-quality downscale (browser filter) for export antialiasing. */
+function downscaleCanvas(srcCanvas, width, height) {
+  const c = document.createElement("canvas");
+  c.width = width;
+  c.height = height;
+  const ctx = c.getContext("2d");
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+  ctx.drawImage(srcCanvas, 0, 0, width, height);
+  return c;
+}
+
+/**
+ * Warp to a canvas. For export, ssaa>1 renders larger then downscales for smooth edges.
+ */
+function warpToCanvas(src, controls, width, height, { ssaa = 1 } = {}) {
+  let ss = Math.max(1, Math.round(ssaa));
+  while (ss > 1 && (width * ss > EXPORT_WARP_MAX_EDGE || height * ss > EXPORT_WARP_MAX_EDGE)) {
+    ss -= 1;
+  }
+  const image = warpToImageData(src, controls, Math.round(width * ss), Math.round(height * ss));
+  const hi = imageDataToCanvas(image);
+  if (ss <= 1) return hi;
+  return downscaleCanvas(hi, width, height);
+}
+
+function canvasToImageData(canvas) {
+  return canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height);
 }
 
 const GUIDE_MAGENTA = "rgba(255, 0, 255, 0.95)";
@@ -1213,8 +1289,19 @@ function exportBaseName() {
  */
 function sampleSourceUV(nx, ny, controls) {
   const rotateRad = (controls.rotateDeg * Math.PI) / 180;
-  const s = mapNxToSource(nx, controls.edgeCurve, controls.curveStart, controls.innerCurve);
-  const bow = verticalCurveAmount(nx, controls.vertCurve, controls.curveStart);
+  const s = mapNxToSource(
+    nx,
+    controls.edgeCurve,
+    controls.curveStart,
+    controls.innerCurve,
+    controls.curveBlend,
+  );
+  const bow = verticalCurveAmount(
+    nx,
+    controls.vertCurve,
+    controls.curveStart,
+    controls.curveBlend,
+  );
   let u = s * 0.5;
   // +vertCurve lifts sides (sample higher on art); − drops sides
   let v = ny - 0.5 - bow;
@@ -1243,8 +1330,19 @@ function sourceUVToOutputXY(u, v, controls, outW, outH) {
     vv = rv;
   }
   const s = uu * 2;
-  const nx = mapSourceToNx(s, controls.edgeCurve, controls.curveStart, controls.innerCurve);
-  const bow = verticalCurveAmount(nx, controls.vertCurve, controls.curveStart);
+  const nx = mapSourceToNx(
+    s,
+    controls.edgeCurve,
+    controls.curveStart,
+    controls.innerCurve,
+    controls.curveBlend,
+  );
+  const bow = verticalCurveAmount(
+    nx,
+    controls.vertCurve,
+    controls.curveStart,
+    controls.curveBlend,
+  );
   const ny = vv + 0.5 + bow;
   const usableHalf = Math.max(0.01, 1 - controls.crop);
   return {
@@ -1374,7 +1472,7 @@ function drawFrontView(controls) {
   const guideHalf = halfVis * start;
   const g1 = cx - guideHalf;
   const g2 = cx + guideHalf;
-  const bow = verticalCurveAmount(1, controls.vertCurve, controls.curveStart) * lh;
+  const bow = verticalCurveAmount(1, controls.vertCurve, controls.curveStart, controls.curveBlend) * lh;
   const labelPath =
     `M ${lx.toFixed(2)} ${(ly - bow).toFixed(2)}` +
     ` Q ${cx.toFixed(2)} ${(ly + bow).toFixed(2)} ${lx2.toFixed(2)} ${(ly - bow).toFixed(2)}` +
@@ -1442,28 +1540,33 @@ async function exportPng() {
     let statusNote;
 
     if (artworkOnly) {
-      const dpi = Math.max(150, Math.min(600, Number(els.sourceDpi.value) || 300));
+      const dpi = Math.max(300, Math.min(600, Number(els.sourceDpi.value) || 300));
       const rendered = renderWarpedArtworkCanvas(controls, dpi);
-      canvas = document.createElement("canvas");
-      canvas.width = rendered.canvas.width;
-      canvas.height = rendered.canvas.height;
-      const ctx = canvas.getContext("2d");
-      ctx.drawImage(rendered.canvas, 0, 0);
+      canvas = rendered.canvas;
       statusNote = `${rendered.mmW.toFixed(1)}×${rendered.mmH.toFixed(1)} mm · ${canvas.width}×${canvas.height}px @ ${rendered.dpi}dpi`;
     } else {
       canvas = document.createElement("canvas");
       canvas.width = controls.outW;
       canvas.height = controls.outH;
       const ctx = canvas.getContext("2d");
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = "high";
       if (mockupImage) {
         const rect = mockupBodyRect(controls.outW, controls.outH, controls);
         const lw = Math.max(64, Math.round(rect.labelW));
         const lh = Math.max(64, Math.round(rect.labelH));
-        const labelImage = warpToImageData(sourceData, controls, lw, lh);
+        const labelCanvas = warpToCanvas(sourceData, controls, lw, lh, { ssaa: EXPORT_WARP_SSAA });
+        const labelImage = canvasToImageData(labelCanvas);
         paintMockup(ctx, controls.outW, controls.outH, labelImage, controls);
       } else {
-        const image = warpToImageData(sourceData, controls, controls.outW, controls.outH);
-        ctx.putImageData(image, 0, 0);
+        const warped = warpToCanvas(
+          sourceData,
+          controls,
+          controls.outW,
+          controls.outH,
+          { ssaa: EXPORT_WARP_SSAA },
+        );
+        ctx.drawImage(warped, 0, 0);
       }
       statusNote = `${controls.outW}×${controls.outH}px`;
     }
@@ -2108,8 +2211,31 @@ function warpedArtworkExportSize(controls, dpi = 300) {
   const mmH = Math.max(5, g.labelHeight);
   const aspect = g.labelWidth / Math.max(0.1, g.labelHeight);
   const mmW = Math.max(5, mmH * aspect);
-  const wPx = Math.max(64, Math.round((mmW / 25.4) * dpi));
-  const hPx = Math.max(64, Math.round((mmH / 25.4) * dpi));
+  let usedDpi = Math.max(300, Math.min(600, dpi));
+  let wPx = Math.max(64, Math.round((mmW / 25.4) * usedDpi));
+  let hPx = Math.max(64, Math.round((mmH / 25.4) * usedDpi));
+
+  // Prefer at least source long-edge resolution so fine type isn't undersampled.
+  if (sourceData) {
+    const srcLong = Math.max(sourceData.width, sourceData.height);
+    const outLong = Math.max(wPx, hPx);
+    if (srcLong > outLong && outLong > 0) {
+      const boost = Math.min(2, srcLong / outLong);
+      wPx = Math.max(64, Math.round(wPx * boost));
+      hPx = Math.max(64, Math.round(hPx * boost));
+      usedDpi = Math.round(usedDpi * boost);
+    }
+  }
+
+  const maxEdge = EXPORT_WARP_MAX_EDGE;
+  const long = Math.max(wPx, hPx);
+  if (long > maxEdge) {
+    const shrink = maxEdge / long;
+    wPx = Math.max(64, Math.round(wPx * shrink));
+    hPx = Math.max(64, Math.round(hPx * shrink));
+    usedDpi = Math.round(usedDpi * shrink);
+  }
+
   return {
     mmW,
     mmH,
@@ -2117,7 +2243,7 @@ function warpedArtworkExportSize(controls, dpi = 300) {
     hPx,
     pageWpt: mmW * MM_TO_PT,
     pageHpt: mmH * MM_TO_PT,
-    dpi,
+    dpi: usedDpi,
   };
 }
 
@@ -2132,15 +2258,18 @@ function warpControlsForExport(controls) {
 
 /**
  * Cylinder-warped isolated artwork (same projection as the bottle label), rasterized.
+ * Supersampled then downscaled so warped edges stay smooth.
  */
 function renderWarpedArtworkCanvas(controls, dpi = 300) {
   if (!sourceData) throw new Error("No source artwork loaded");
   const size = warpedArtworkExportSize(controls, dpi);
-  const image = warpToImageData(sourceData, warpControlsForExport(controls), size.wPx, size.hPx);
-  const canvas = document.createElement("canvas");
-  canvas.width = image.width;
-  canvas.height = image.height;
-  canvas.getContext("2d").putImageData(image, 0, 0);
+  const canvas = warpToCanvas(
+    sourceData,
+    warpControlsForExport(controls),
+    size.wPx,
+    size.hPx,
+    { ssaa: EXPORT_WARP_SSAA },
+  );
   return { canvas, ...size };
 }
 
@@ -2189,7 +2318,7 @@ function buildWarpedArtworkSvg(pathSet, controls) {
 }
 
 function buildWarpedArtworkSvgFromRaster(controls) {
-  const dpi = Math.max(150, Math.min(600, Number(els.sourceDpi.value) || 300));
+  const dpi = Math.max(300, Math.min(600, Number(els.sourceDpi.value) || 300));
   const { canvas, pageWpt, pageHpt, mmW, mmH, dpi: usedDpi } = renderWarpedArtworkCanvas(controls, dpi);
   const dataUrl = canvas.toDataURL("image/png");
   const svgText = [
@@ -2201,7 +2330,78 @@ function buildWarpedArtworkSvgFromRaster(controls) {
   return { svgText, pageWpt, pageHpt, mmW, mmH, dpi: usedDpi };
 }
 
-async function exportWarpedArtworkPdfFromRaster(controls) {
+/** Walk M/L/Z commands produced by warpPathD. */
+function forEachWarpedPathCommand(d, onMove, onLine, onClose) {
+  const re = /([MLZ])\s*([^MLZ]*)/gi;
+  let m;
+  while ((m = re.exec(d))) {
+    const type = m[1].toUpperCase();
+    const nums = (m[2].match(/[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?/g) || []).map(Number);
+    if (type === "M") {
+      if (nums.length < 2) continue;
+      onMove(nums[0], nums[1]);
+      for (let i = 2; i + 1 < nums.length; i += 2) onLine(nums[i], nums[i + 1]);
+    } else if (type === "L") {
+      for (let i = 0; i + 1 < nums.length; i += 2) onLine(nums[i], nums[i + 1]);
+    } else if (type === "Z") {
+      onClose();
+    }
+  }
+}
+
+/** Draw one warped path as true PDF vector ops (selectable in Illustrator). */
+function drawWarpedPathOnJsPdf(doc, d, styled, strokeScale) {
+  const hasFill = styled.fill && styled.fill !== "none";
+  const hasStroke = styled.stroke && styled.stroke !== "none";
+  if (!hasFill && !hasStroke) return false;
+
+  let points = 0;
+  forEachWarpedPathCommand(
+    d,
+    (x, y) => {
+      doc.moveTo(x, y);
+      points++;
+    },
+    (x, y) => {
+      doc.lineTo(x, y);
+      points++;
+    },
+    () => {
+      doc.close();
+    },
+  );
+  if (points < 2) return false;
+
+  if (hasFill) {
+    const rgb = parseCssRgb(styled.fill) || [0, 0, 0];
+    doc.setFillColor(rgb[0], rgb[1], rgb[2]);
+  }
+  if (hasStroke) {
+    const rgb = parseCssRgb(styled.stroke) || [0, 0, 0];
+    doc.setStrokeColor(rgb[0], rgb[1], rgb[2]);
+    const sw = Math.max(0.1, (styled.strokeWidth || 1) * strokeScale);
+    doc.setLineWidth(sw);
+  }
+
+  const evenodd = styled.fillRule === "evenodd";
+  const fillOp = evenodd ? "evenodd" : undefined;
+  try {
+    if (hasFill && hasStroke) doc.fillStroke(fillOp);
+    else if (hasFill) doc.fill(fillOp);
+    else doc.stroke();
+  } catch {
+    if (hasFill && hasStroke) doc.fillStroke();
+    else if (hasFill) doc.fill();
+    else doc.stroke();
+  }
+  return true;
+}
+
+/**
+ * Build a vector PDF from warped source paths (no raster embed).
+ * Each shape is a separate path object — selectable in Illustrator.
+ */
+async function exportWarpedArtworkPdfFromPaths(pathSet, controls) {
   await loadScriptOnce(
     "jspdf-umd",
     "https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js",
@@ -2209,15 +2409,40 @@ async function exportWarpedArtworkPdfFromRaster(controls) {
   const jsPDFCtor = window.jspdf?.jsPDF || window.jsPDF;
   if (!jsPDFCtor) throw new Error("jsPDF failed to load");
 
-  const dpi = Math.max(150, Math.min(600, Number(els.sourceDpi.value) || 300));
-  const { canvas, pageWpt, pageHpt, mmW, mmH, dpi: usedDpi } = renderWarpedArtworkCanvas(controls, dpi);
-  const doc = new jsPDFCtor({
-    unit: "pt",
-    format: [Math.max(1, pageWpt), Math.max(1, pageHpt)],
-    compress: true,
-  });
-  doc.addImage(canvas.toDataURL("image/png"), "PNG", 0, 0, pageWpt, pageHpt);
-  return { blob: doc.output("blob"), dpi: usedDpi, mmW, mmH };
+  const size = warpedArtworkExportSize(controls, 72);
+  const w = Math.max(1, size.pageWpt);
+  const h = Math.max(1, size.pageHpt);
+  const detail = Math.max(16, Number(controls.pathDetail) || DEFAULTS.pathDetail);
+  const wc = warpControlsForExport(controls);
+  const ink = printInkColor(controls);
+  const { paths, w: srcW, h: srcH } = pathSet;
+  const strokeScale = w / Math.max(1, srcW);
+
+  const doc = new jsPDFCtor({ unit: "pt", format: [w, h], compress: true });
+
+  let pathCount = 0;
+  for (const src of paths) {
+    const styled = stylePathForArtworkExport(src, { ...controls, artColor: ink }, ink);
+    if (styled.fill === "none" && styled.stroke === "none") continue;
+    const warped = warpPathD(styled.d, wc, srcW, srcH, w, h, detail);
+    if (!warped) continue;
+    if (drawWarpedPathOnJsPdf(doc, warped, styled, strokeScale)) pathCount++;
+  }
+
+  if (!pathCount) {
+    throw new Error(
+      "No vector ink paths to export (paper may be knocked out). Turn off Knockout, or use a PDF/SVG with outlined paths.",
+    );
+  }
+
+  return {
+    blob: doc.output("blob"),
+    mmW: size.mmW,
+    mmH: size.mmH,
+    pathCount,
+    pageWpt: w,
+    pageHpt: h,
+  };
 }
 
 async function getVectorPathSet() {
@@ -2228,7 +2453,9 @@ async function getVectorPathSet() {
   if (sourceKind === "svg" && sourceSvgText && sourceVectorSize) {
     return extractSvgVectorPaths(sourceSvgText, sourceVectorSize.w, sourceVectorSize.h);
   }
-  throw new Error("Reload the PDF/SVG to enable vector export");
+  throw new Error(
+    "Vector PDF needs a PDF or SVG with paths. Raster images (PNG/JPG) can’t export selectable vectors.",
+  );
 }
 
 async function exportSvg() {
@@ -2276,39 +2503,21 @@ async function exportPdf() {
     setStatus("PDF export is artwork-only — switch Export to “Artwork only”");
     return;
   }
-  setStatus("Exporting warped artwork PDF…");
+  setStatus("Extracting vector paths…");
   setExportBusy(true);
   await new Promise((r) => setTimeout(r, 20));
 
   try {
-    let blob = null;
-    let mode = "vector";
-    let mmW;
-    let mmH;
+    const pathSet = await getVectorPathSet();
+    setStatus(`Warping ${pathSet.paths.length} vector paths…`);
+    const result = await exportWarpedArtworkPdfFromPaths(pathSet, controls);
+    if (!result.blob || result.blob.size < 100) throw new Error("PDF export produced an empty file");
 
-    try {
-      const pathSet = await getVectorPathSet();
-      const result = buildWarpedArtworkSvg(pathSet, controls);
-      if (!result) throw new Error("NO_VECTOR_INK");
-      setStatus("Writing warped vector PDF…");
-      blob = await svgTextToPdfBlob(result.svgText, result.pageWpt, result.pageHpt);
-      if (!blob || blob.size < 200) throw new Error("empty vector pdf");
-      mmW = result.mmW;
-      mmH = result.mmH;
-    } catch (vecErr) {
-      console.warn("Vector warp PDF unavailable, using raster:", vecErr);
-      setStatus("Warping artwork (raster)…");
-      const raster = await exportWarpedArtworkPdfFromRaster(controls);
-      blob = raster.blob;
-      mode = `raster ${raster.dpi}dpi`;
-      mmW = raster.mmW;
-      mmH = raster.mmH;
-    }
-
-    downloadBlob(blob, `${exportBaseName()}-warped-${exportStamp()}.pdf`);
+    downloadBlob(result.blob, `${exportBaseName()}-warped-${exportStamp()}.pdf`);
     const inkNote = isNearWhiteCss(controls.artColor) ? " · ink black" : "";
     setStatus(
-      `Exported warped PDF ${mmW.toFixed(1)}×${mmH.toFixed(1)} mm (${(blob.size / 1024).toFixed(0)} KB · ${mode}${inkNote})`,
+      `Exported vector PDF ${result.mmW.toFixed(1)}×${result.mmH.toFixed(1)} mm` +
+        ` (${result.pathCount} paths · ${(result.blob.size / 1024).toFixed(0)} KB${inkNote})`,
     );
   } catch (err) {
     console.error(err);
@@ -2533,6 +2742,7 @@ function resetProjection() {
   els.edgeCurve.value = String(DEFAULTS.edgeCurve);
   els.innerCurve.value = String(DEFAULTS.innerCurve);
   els.curveStart.value = String(DEFAULTS.curveStart);
+  els.curveBlend.value = String(DEFAULTS.curveBlend);
   els.vertCurve.value = String(DEFAULTS.vertCurve);
 }
 
@@ -2625,6 +2835,7 @@ function bindUi() {
     els.edgeCurve,
     els.innerCurve,
     els.curveStart,
+    els.curveBlend,
     els.vertCurve,
     els.rotate,
     els.offsetX,
