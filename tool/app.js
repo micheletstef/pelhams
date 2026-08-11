@@ -623,31 +623,47 @@ function hexToRgb(hex) {
 }
 
 /**
- * Treat light paper as transparent ink; recolor remaining marks with artColor.
- * Soft luminance → alpha so anti-aliased type stays clean.
+ * Recolor artwork with artColor. Optionally knock out neutral paper so the
+ * PDF/SVG page fill doesn't cover the bottle.
+ *
+ * Paper = bright + near-neutral (typical PDF page gray). Chromatic pixels are
+ * always kept as ink even when light, so brand colors don't vanish.
  */
 function styleArtworkSample(rgba, controls) {
-  if (!controls.knockoutWhite) return rgba;
-  const lum = (0.299 * rgba[0] + 0.587 * rgba[1] + 0.114 * rgba[2]) / 255;
-  const minC = Math.min(rgba[0], rgba[1], rgba[2]) / 255;
-  // PDF paper is often light gray, not pure white
-  const paper = Math.max(lum, minC);
+  const [cr, cg, cb] = hexToRgb(controls.artColor);
+  const a0 = rgba[3];
+  if (a0 < 0.5) return [cr, cg, cb, 0];
 
-  // Full ink ≤50%; fully transparent ≥78% (clears milky page fills)
-  const paperStart = 0.5;
-  const paperEnd = 0.78;
-  let ink;
-  if (paper >= paperEnd) ink = 0;
-  else if (paper <= paperStart) ink = 1;
-  else {
-    const t = 1 - (paper - paperStart) / (paperEnd - paperStart);
-    ink = t * t;
+  const r = rgba[0];
+  const g = rgba[1];
+  const b = rgba[2];
+  const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  const minC = Math.min(r, g, b) / 255;
+  const maxC = Math.max(r, g, b) / 255;
+  const chroma = maxC - minC;
+  const neutral = chroma < 0.1;
+
+  if (!controls.knockoutWhite) {
+    // Still recolor marks so the color picker always works; leave paper as-is
+    // so an opaque PDF page doesn't become a solid artColor plate.
+    let ink = 1 - lum;
+    ink = Math.max(0, (ink - 0.04) / 0.96);
+    if (ink < 0.004) return rgba;
+    return [cr, cg, cb, a0 * Math.min(1, ink)];
   }
 
-  const [cr, cg, cb] = hexToRgb(controls.artColor);
-  // Force exact zeros so multiply/source-over never lifts the bottle
+  // Colored fills/strokes are ink even when light (yellow, sky blue, etc.)
+  if (!neutral) {
+    return [cr, cg, cb, a0];
+  }
+
+  // Neutral matte: black → full ink, true paper (≥ ~92% / PDF gray ~235+) → clear.
+  // Soft falloff keeps anti-aliased type; mid grays stay visible as ink.
+  const paper = Math.max(lum, minC);
+  let ink = 1 - paper;
+  ink = Math.max(0, (ink - 0.08) / 0.92);
   if (ink < 0.004) return [cr, cg, cb, 0];
-  return [cr, cg, cb, rgba[3] * ink];
+  return [cr, cg, cb, a0 * ink];
 }
 
 /**
@@ -826,9 +842,12 @@ function paintMockup(ctx, width, height, labelImage, controls) {
   tmp.getContext("2d").putImageData(labelImage, 0, 0);
 
   ctx.save();
-  // Multiply: residual paper can't lighten the glass; ink darkens the body
+  // Multiply: ink darkens the glass body. Paper is already alpha-0 from knockout.
+  // Light art colors fall back to source-over so they stay visible on the bottle.
   if (controls.knockoutWhite) {
-    ctx.globalCompositeOperation = "multiply";
+    const [ar, ag, ab] = hexToRgb(controls.artColor || "#000000");
+    const artLum = (0.299 * ar + 0.587 * ag + 0.114 * ab) / 255;
+    ctx.globalCompositeOperation = artLum > 0.65 ? "source-over" : "multiply";
   }
   ctx.drawImage(tmp, rect.lx, rect.ly, rect.labelW, rect.labelH);
   ctx.globalCompositeOperation = "source-over";
