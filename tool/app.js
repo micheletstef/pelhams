@@ -639,19 +639,23 @@ function updateLabels() {
 }
 
 /**
- * Screen X → cylinder angle θ (radians from front center).
- * Orthographic: x = R·sin(θ) ⇒ θ = asin(nx). wrap blends flat↔cylinder.
+ * Screen X → cylinder angle θ (radians from label center).
+ * nx is -1..1 across the *label* rect (not the full bottle).
+ * Orthographic: chord x = R·sin(θ) ⇒ at label edges θ = ±halfArc.
+ * wrap blends flat ↔ cylinder foreshortening within that arc.
  */
 function screenXToTheta(nx, wrap, edgeSquash, labelArcRad) {
   const x = Math.max(-1, Math.min(1, nx));
-  const halfArc = labelArcRad / 2;
-  const flat = x * halfArc; // linear across label arc
-  let cyl = Math.asin(x); // physical foreshortening on visible front
-  // Remap asin range so |x|=1 lands at ±min(π/2, halfArc) feel — keep true asin for bottle
-  // Artistic edge squash
+  const halfArc = Math.max(1e-6, labelArcRad / 2);
+  const flat = x * halfArc;
+  // Label chord spans ±sin(min(halfArc, π/2)) of the bottle radius.
+  // Small labels must map edges to ±halfArc — not ±π/2 (that stretched sides below ~50%).
+  const maxSin = Math.sin(Math.min(halfArc, Math.PI / 2));
+  let cyl = Math.asin(Math.max(-1, Math.min(1, x * maxSin)));
   if (edgeSquash !== 1) {
     const s = Math.max(0.2, edgeSquash);
-    const t = Math.sign(cyl) * Math.pow(Math.abs(cyl) / (Math.PI / 2), s) * (Math.PI / 2);
+    const limit = Math.min(halfArc, Math.PI / 2);
+    const t = Math.sign(cyl) * Math.pow(Math.abs(cyl) / limit, s) * limit;
     cyl = t;
   }
   return flat * (1 - wrap) + cyl * wrap;
@@ -905,18 +909,17 @@ function mockupBodyRect(width, height, controls) {
   const panelRight = width * mockup.bodyRightFrac;
   const panelW = Math.max(1, panelRight - panelLeft);
 
-  // Label height as fraction of the physical label panel
-  const labelH = Math.min(
-    panelH * 1.15,
+  // Physical label size vs calibrated panel (scale with labelScale via g.*)
+  const labelH = Math.max(
+    2,
     panelH * (g.labelHeight / vessel.labelPanel) * controls.scaleY
   );
-  const visFrac = Math.min(1, g.visibleLabelWidth / g.width);
-  const labelW = Math.min(panelW, panelW * visFrac * controls.scaleX);
+  const visFrac = Math.min(1, Math.max(0.001, g.visibleLabelWidth / g.width));
+  const labelW = Math.max(2, panelW * visFrac * controls.scaleX);
 
-  let lx = panelLeft + (panelW - labelW) / 2 + controls.offsetX * panelW;
-  let ly = panelTop + (panelH - labelH) / 2 + controls.offsetY * panelH;
-  lx = Math.max(panelLeft, Math.min(panelRight - labelW, lx));
-  ly = Math.max(panelTop - labelH * 0.15, Math.min(panelBot - labelH * 0.85, ly));
+  // Free placement — offsets may put the label anywhere on the bottle
+  const lx = panelLeft + (panelW - labelW) / 2 + controls.offsetX * panelW;
+  const ly = panelTop + (panelH - labelH) / 2 + controls.offsetY * panelH;
 
   return {
     panelLeft,
@@ -925,8 +928,8 @@ function mockupBodyRect(width, height, controls) {
     panelH,
     lx,
     ly,
-    labelW: Math.max(2, labelW),
-    labelH: Math.max(2, labelH),
+    labelW,
+    labelH,
   };
 }
 
@@ -1031,8 +1034,13 @@ function renderPreview() {
         const rect = mockupBodyRect(w, h, controls);
         const lw = Math.max(64, Math.round(rect.labelW));
         const lh = Math.max(64, Math.round(rect.labelH));
-        // scaleY already sizes the band on the bottle — keep UV at 1 so art isn't cropped
-        labelImage = warpToImageData(sourceData, { ...controls, scaleY: 1 }, lw, lh);
+        // scaleY sizes the band; offsetX positions the rect on the bottle (not UV)
+        labelImage = warpToImageData(
+          sourceData,
+          { ...controls, scaleY: 1, offsetX: 0 },
+          lw,
+          lh,
+        );
       }
       if (token !== renderToken) return;
       paintMockup(previewCtx, w, h, labelImage, controls);
@@ -1227,20 +1235,17 @@ function drawFrontView(controls) {
   const bodyBot = vessel.bodyBotFrac * 100;
   const bodyH = bodyBot - bodyTop;
 
-  const lhMm = Math.min(H * 0.9, g.labelHeight * controls.scaleY);
+  const lhMm = Math.max(1, g.labelHeight * controls.scaleY);
   const lh = (lhMm / H) * 100;
   const bodyMid = (bodyTop + bodyBot) / 2;
-  let ly = bodyMid - lh / 2 + controls.offsetY * 50;
-  ly = Math.max(bodyTop - 5, Math.min(bodyBot - lh + 5, ly));
+  const ly = bodyMid - lh / 2 + controls.offsetY * 50;
   const ly2 = ly + lh;
 
-  const visFrac = Math.min(1, g.visibleLabelWidth / (R * 2));
+  const visFrac = Math.min(1, Math.max(0.001, g.visibleLabelWidth / (R * 2)));
   const halfVis = (visFrac * 100) / 2;
-  // Body fills most of image width; inset slightly for stroke padding in crop
   const inset = 4;
   const cx = 50 + controls.offsetX * 40;
-  let lx = cx - halfVis;
-  lx = Math.max(inset, Math.min(100 - inset - halfVis * 2, lx));
+  const lx = cx - halfVis;
   const lx2 = lx + halfVis * 2;
   // Same bow model as the artwork warp (fraction of label height at the rim)
   const bow = horizontalCurveOffset(1, controls.hCurve) * lh;
@@ -1325,7 +1330,12 @@ async function exportPng() {
         const rect = mockupBodyRect(controls.outW, controls.outH, controls);
         const lw = Math.max(64, Math.round(rect.labelW));
         const lh = Math.max(64, Math.round(rect.labelH));
-        const labelImage = warpToImageData(sourceData, { ...controls, scaleY: 1 }, lw, lh);
+        const labelImage = warpToImageData(
+          sourceData,
+          { ...controls, scaleY: 1, offsetX: 0 },
+          lw,
+          lh,
+        );
         paintMockup(ctx, controls.outW, controls.outH, labelImage, controls);
       } else {
         const image = warpToImageData(sourceData, controls, controls.outW, controls.outH);
