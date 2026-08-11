@@ -284,9 +284,18 @@ input[type="number"]:disabled {
   position: relative;
   overflow: hidden;
   padding: 0;
-  background: #f3f3f3;
+  background: #fff;
   min-height: 0;
-  cursor: zoom-in;
+  cursor: default;
+  touch-action: none;
+}
+
+.viewport.is-zoomed {
+  cursor: grab;
+}
+
+.viewport.is-zoomed.is-panning {
+  cursor: grabbing;
 }
 
 .viewport-stage {
@@ -308,7 +317,7 @@ input[type="number"]:disabled {
   border: none;
   background: #fff;
   image-rendering: auto;
-  box-shadow: 0 0 0 1px #ddd;
+  box-shadow: none;
 }
 
 @media (max-width: 900px) {

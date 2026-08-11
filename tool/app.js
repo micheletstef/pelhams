@@ -21,9 +21,11 @@ const els = {
   labelArcReadout: $("label-arc-readout"),
   btnResetProjection: $("btn-reset-projection"),
   edgeCurve: $("edge-curve"),
+  innerCurve: $("inner-curve"),
   curveStart: $("curve-start"),
   vertCurve: $("vert-curve"),
   edgeCurveVal: $("edge-curve-val"),
+  innerCurveVal: $("inner-curve-val"),
   curveStartVal: $("curve-start-val"),
   vertCurveVal: $("vert-curve-val"),
   rotate: $("rotate"),
@@ -165,6 +167,7 @@ const DEFAULTS = {
   lockLabelSize: true,
   labelScale: 1,
   edgeCurve: 0,
+  innerCurve: 0,
   curveStart: 50,
   vertCurve: 0,
   rotate: 0,
@@ -433,31 +436,90 @@ function setStatus(_msg) {
 }
 
 let viewZoom = 1;
+let viewPanX = 0;
+let viewPanY = 0;
 const VIEW_ZOOM_MIN = 0.2;
 const VIEW_ZOOM_MAX = 8;
 
-function applyViewZoom() {
+function applyViewTransform() {
   if (!els.viewportStage) return;
-  els.viewportStage.style.transform = `scale(${viewZoom})`;
+  els.viewportStage.style.transform = `translate(${viewPanX}px, ${viewPanY}px) scale(${viewZoom})`;
+  if (els.viewport) {
+    els.viewport.classList.toggle("is-zoomed", viewZoom > 1.001);
+    els.viewport.classList.toggle("is-panning", Boolean(els.viewport.dataset.panning));
+  }
+}
+
+function resetViewTransform() {
+  viewZoom = 1;
+  viewPanX = 0;
+  viewPanY = 0;
+  applyViewTransform();
 }
 
 function bindViewerZoom() {
   if (!els.viewport) return;
-  els.viewport.addEventListener(
+  const vp = els.viewport;
+
+  vp.addEventListener(
     "wheel",
     (e) => {
       e.preventDefault();
       const factor = e.deltaY > 0 ? 1 / 1.12 : 1.12;
-      viewZoom = Math.min(VIEW_ZOOM_MAX, Math.max(VIEW_ZOOM_MIN, viewZoom * factor));
-      applyViewZoom();
+      const next = Math.min(VIEW_ZOOM_MAX, Math.max(VIEW_ZOOM_MIN, viewZoom * factor));
+      viewZoom = next;
+      if (viewZoom <= 1.001) {
+        viewZoom = 1;
+        viewPanX = 0;
+        viewPanY = 0;
+      }
+      applyViewTransform();
     },
     { passive: false },
   );
-  els.viewport.addEventListener("dblclick", () => {
-    viewZoom = 1;
-    applyViewZoom();
+
+  vp.addEventListener("dblclick", () => {
+    resetViewTransform();
   });
-  applyViewZoom();
+
+  let dragging = false;
+  let lastX = 0;
+  let lastY = 0;
+
+  vp.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0 || viewZoom <= 1.001) return;
+    dragging = true;
+    lastX = e.clientX;
+    lastY = e.clientY;
+    vp.dataset.panning = "1";
+    vp.classList.add("is-panning");
+    vp.setPointerCapture(e.pointerId);
+  });
+
+  vp.addEventListener("pointermove", (e) => {
+    if (!dragging) return;
+    viewPanX += e.clientX - lastX;
+    viewPanY += e.clientY - lastY;
+    lastX = e.clientX;
+    lastY = e.clientY;
+    applyViewTransform();
+  });
+
+  const endPan = (e) => {
+    if (!dragging) return;
+    dragging = false;
+    delete vp.dataset.panning;
+    vp.classList.remove("is-panning");
+    try {
+      vp.releasePointerCapture(e.pointerId);
+    } catch {
+      /* already released */
+    }
+  };
+  vp.addEventListener("pointerup", endPan);
+  vp.addEventListener("pointercancel", endPan);
+
+  applyViewTransform();
 }
 
 /** Physical vessel + label geometry derived from mm inputs. */
@@ -499,6 +561,7 @@ function collectSettings() {
     lockLabelSize: els.lockLabelSize.checked,
     labelScale: els.labelScale.value,
     edgeCurve: els.edgeCurve.value,
+    innerCurve: els.innerCurve.value,
     curveStart: els.curveStart.value,
     vertCurve: els.vertCurve.value,
     rotate: els.rotate.value,
@@ -537,6 +600,7 @@ function applySettings(s) {
   setCheck(els.lockLabelSize, "lockLabelSize");
   setVal(els.labelScale, "labelScale");
   setVal(els.edgeCurve, "edgeCurve");
+  setVal(els.innerCurve, "innerCurve");
   setVal(els.curveStart, "curveStart");
   setVal(els.vertCurve, "vertCurve");
   setVal(els.rotate, "rotate");
@@ -588,7 +652,8 @@ function readControls() {
     labelHeight: Number(els.labelHeight.value) || DEFAULTS.labelHeight,
     lockLabelSize: els.lockLabelSize?.checked ?? DEFAULTS.lockLabelSize,
     labelScale: Math.max(0.05, Number(els.labelScale?.value) || DEFAULTS.labelScale),
-    edgeCurve: Math.max(-1, Math.min(1, Number(els.edgeCurve?.value) || 0)),
+    edgeCurve: Math.max(-2, Math.min(2, Number(els.edgeCurve?.value) || 0)),
+    innerCurve: Math.max(-2, Math.min(2, Number(els.innerCurve?.value) || 0)),
     curveStart: Math.max(0, Math.min(1, (Number(els.curveStart?.value) || DEFAULTS.curveStart) / 100)),
     vertCurve: Math.max(-1, Math.min(1, Number(els.vertCurve?.value) || 0)),
     rotateDeg: Number(els.rotate.value),
@@ -622,6 +687,11 @@ function updateLabels() {
     els.edgeCurveVal.textContent =
       pct === 0 ? "0%" : pct > 0 ? `+${pct}% stretch` : `${pct}% condense`;
   }
+  if (els.innerCurveVal) {
+    const pct = Math.round(c.innerCurve * 100);
+    els.innerCurveVal.textContent =
+      pct === 0 ? "0%" : pct > 0 ? `+${pct}% stretch` : `${pct}% condense`;
+  }
   if (els.curveStartVal) els.curveStartVal.textContent = `${Math.round(c.curveStart * 100)}%`;
   if (els.vertCurveVal) {
     const pct = Math.round(c.vertCurve * 100);
@@ -651,31 +721,46 @@ function updateLabels() {
     ` · ${g.labelArcDeg.toFixed(1)}° · ${(g.coverage * 100).toFixed(0)}% circ.${nativeNote}`;
 }
 
+/** Stretch (+) / condense (−) remap of t∈[0,1]. Range ±2 (±200%). */
+function applyCurveWarp(t, amt) {
+  const a = Math.max(-2, Math.min(2, amt));
+  const u = Math.max(0, Math.min(1, t));
+  if (Math.abs(a) <= 1e-6) return u;
+
+  const tStretch = Math.asin(u) / (Math.PI / 2);
+  const tCondense = Math.sin(u * (Math.PI / 2));
+  const abs = Math.abs(a);
+  const mix = Math.min(1, abs);
+  let tWarp =
+    a >= 0 ? u * (1 - mix) + tStretch * mix : u * (1 - mix) + tCondense * mix;
+
+  const extra = Math.max(0, abs - 1);
+  if (extra > 0) {
+    if (a > 0) tWarp = Math.pow(Math.max(0, tWarp), 1 + extra * 2.5);
+    else tWarp = 1 - Math.pow(Math.max(0, 1 - tWarp), 1 + extra * 2.5);
+  }
+  return tWarp;
+}
+
 /**
  * Map label x (-1..1) → source x (-1..1).
- * Center stays flat until curveStart; beyond that:
- *   edgeCurve > 0 → stretch (cylinder asin foreshortening)
- *   edgeCurve < 0 → condense (inverse sin expansion)
+ * Inside ±curveStart: innerCurve · Outside: edgeCurve
+ *   > 0 → stretch (cylinder asin foreshortening)
+ *   < 0 → condense (inverse sin expansion)
  */
-function mapNxToSource(nx, edgeCurve, curveStart) {
+function mapNxToSource(nx, edgeCurve, curveStart, innerCurve = 0) {
   const x = Math.max(-1, Math.min(1, nx));
-  const amt = Math.max(-1, Math.min(1, edgeCurve));
-  if (Math.abs(amt) <= 1e-6) return x;
-
   const start = Math.max(0, Math.min(0.999, curveStart));
   const ax = Math.abs(x);
   const sign = x < 0 ? -1 : 1;
 
-  if (ax <= start) return x;
+  if (ax <= start) {
+    if (start <= 1e-6) return 0;
+    const tWarp = applyCurveWarp(ax / start, innerCurve);
+    return sign * start * tWarp;
+  }
 
-  const t = (ax - start) / (1 - start); // 0 at start line → 1 at rim
-  const tFlat = t;
-  const tStretch = Math.asin(Math.min(1, Math.max(0, t))) / (Math.PI / 2);
-  const tCondense = Math.sin(t * (Math.PI / 2));
-  const tWarp =
-    amt >= 0
-      ? tFlat * (1 - amt) + tStretch * amt
-      : tFlat * (1 + amt) + tCondense * -amt;
+  const tWarp = applyCurveWarp((ax - start) / (1 - start), edgeCurve);
   return sign * (start + (1 - start) * tWarp);
 }
 
@@ -691,13 +776,13 @@ function verticalCurveAmount(nx, vertCurve, curveStart) {
   return amt * 0.22 * smooth;
 }
 
-function mapSourceToNx(s, edgeCurve, curveStart) {
+function mapSourceToNx(s, edgeCurve, curveStart, innerCurve = 0) {
   // Inverse of mapNxToSource via binary search
   let lo = -1;
   let hi = 1;
   for (let i = 0; i < 28; i++) {
     const mid = (lo + hi) / 2;
-    if (mapNxToSource(mid, edgeCurve, curveStart) < s) lo = mid;
+    if (mapNxToSource(mid, edgeCurve, curveStart, innerCurve) < s) lo = mid;
     else hi = mid;
   }
   return (lo + hi) / 2;
@@ -1128,7 +1213,7 @@ function exportBaseName() {
  */
 function sampleSourceUV(nx, ny, controls) {
   const rotateRad = (controls.rotateDeg * Math.PI) / 180;
-  const s = mapNxToSource(nx, controls.edgeCurve, controls.curveStart);
+  const s = mapNxToSource(nx, controls.edgeCurve, controls.curveStart, controls.innerCurve);
   const bow = verticalCurveAmount(nx, controls.vertCurve, controls.curveStart);
   let u = s * 0.5;
   // +vertCurve lifts sides (sample higher on art); − drops sides
@@ -1158,7 +1243,7 @@ function sourceUVToOutputXY(u, v, controls, outW, outH) {
     vv = rv;
   }
   const s = uu * 2;
-  const nx = mapSourceToNx(s, controls.edgeCurve, controls.curveStart);
+  const nx = mapSourceToNx(s, controls.edgeCurve, controls.curveStart, controls.innerCurve);
   const bow = verticalCurveAmount(nx, controls.vertCurve, controls.curveStart);
   const ny = vv + 0.5 + bow;
   const usableHalf = Math.max(0.01, 1 - controls.crop);
@@ -2443,9 +2528,10 @@ async function reloadPdfPage() {
   }
 }
 
-/** Reset projection to flat (no edge / vert curve). */
+/** Reset projection to flat (no edge / inner / vert curve). */
 function resetProjection() {
   els.edgeCurve.value = String(DEFAULTS.edgeCurve);
+  els.innerCurve.value = String(DEFAULTS.innerCurve);
   els.curveStart.value = String(DEFAULTS.curveStart);
   els.vertCurve.value = String(DEFAULTS.vertCurve);
 }
@@ -2537,6 +2623,7 @@ function bindUi() {
     els.labelHeight,
     els.labelScale,
     els.edgeCurve,
+    els.innerCurve,
     els.curveStart,
     els.vertCurve,
     els.rotate,

@@ -116,8 +116,13 @@
           </summary>
           <div class="slider-row">
             <span class="slider-label">Edge curve</span>
-            <input id="edge-curve" type="range" min="-1" max="1" value="0" step="0.01" />
+            <input id="edge-curve" type="range" min="-2" max="2" value="0" step="0.01" />
             <span id="edge-curve-val" class="val">0%</span>
+          </div>
+          <div class="slider-row">
+            <span class="slider-label">Inner curve</span>
+            <input id="inner-curve" type="range" min="-2" max="2" value="0" step="0.01" />
+            <span id="inner-curve-val" class="val">0%</span>
           </div>
           <div class="slider-row">
             <span class="slider-label">Curve start</span>
@@ -129,7 +134,7 @@
             <input id="vert-curve" type="range" min="-1" max="1" value="0" step="0.01" />
             <span id="vert-curve-val" class="val">None</span>
           </div>
-          <p class="muted">Edge: condense ← 0 → stretch · Vert: down ← 0 → up · Lines = curve start</p>
+          <p class="muted">Inner = between lines · Edge = outside · −200% condense ↔ +200% stretch</p>
         </details>
 
         <details class="fold">
@@ -178,7 +183,7 @@
       </aside>
 
       <main class="stage">
-        <div class="viewport" id="viewport" title="Scroll to zoom">
+        <div class="viewport" id="viewport">
           <div class="viewport-stage" id="viewport-stage">
             <canvas id="preview" width="1400" height="2000"></canvas>
           </div>
@@ -186,6 +191,6 @@
       </main>
     </div>
 
-    <script type="module" src="app.js?v=20260811-magenta"></script>
+    <script type="module" src="app.js?v=20260811-inner"></script>
   </body>
 </html>
