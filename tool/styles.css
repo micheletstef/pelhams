@@ -68,6 +68,22 @@ legend {
   user-select: none;
 }
 
+.fold > summary > span:first-child {
+  flex: 1;
+}
+
+.summary-toggle {
+  font-weight: 500;
+  color: #444;
+  cursor: pointer;
+}
+
+.fold.is-disabled .slider-row,
+.fold.is-disabled .checks {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
 .fold > summary::-webkit-details-marker {
   display: none;
 }

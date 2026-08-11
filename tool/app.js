@@ -19,6 +19,7 @@ const els = {
   labelScaleVal: $("label-scale-val"),
   btnNativeSize: $("btn-native-size"),
   labelArcReadout: $("label-arc-readout"),
+  projectionEnabled: $("projection-enabled"),
   curvature: $("curvature"),
   edgeWarp: $("edge-warp"),
   vBow: $("v-bow"),
@@ -172,6 +173,7 @@ const DEFAULTS = {
   labelHeight: 105,
   lockLabelSize: true,
   labelScale: 1,
+  projectionEnabled: true,
   curvature: 1,
   edgeWarp: 1,
   vBow: 0,
@@ -481,6 +483,7 @@ function collectSettings() {
     labelHeight: els.labelHeight.value,
     lockLabelSize: els.lockLabelSize.checked,
     labelScale: els.labelScale.value,
+    projectionEnabled: els.projectionEnabled.checked,
     curvature: els.curvature.value,
     edgeWarp: els.edgeWarp.value,
     vBow: els.vBow.value,
@@ -522,6 +525,7 @@ function applySettings(s) {
   setVal(els.labelHeight, "labelHeight");
   setCheck(els.lockLabelSize, "lockLabelSize");
   setVal(els.labelScale, "labelScale");
+  setCheck(els.projectionEnabled, "projectionEnabled");
   setVal(els.curvature, "curvature");
   setVal(els.edgeWarp, "edgeWarp");
   setVal(els.vBow, "vBow");
@@ -571,20 +575,60 @@ function loadSettings() {
   }
 }
 
+/** Flat / identity projection — used when Projection toggle is off. */
+const PROJECTION_OFF = {
+  wrap: 0,
+  edgeSquash: 1,
+  hCurve: 0,
+  perspective: 0,
+  scaleX: 1,
+  scaleY: 1,
+  offsetX: 0,
+};
+
+function projectionControls() {
+  return [
+    els.curvature,
+    els.edgeWarp,
+    els.vBow,
+    els.perspective,
+    els.scaleX,
+    els.scaleY,
+    els.offsetX,
+  ];
+}
+
+function syncProjectionUi() {
+  const on = els.projectionEnabled?.checked ?? true;
+  const fold = els.projectionEnabled?.closest("details.fold");
+  if (fold) fold.classList.toggle("is-disabled", !on);
+  for (const el of projectionControls()) {
+    if (el) el.disabled = !on;
+  }
+}
+
 function readControls() {
+  const projectionEnabled = els.projectionEnabled?.checked ?? DEFAULTS.projectionEnabled;
+  const projection = projectionEnabled
+    ? {
+        wrap: Number(els.curvature.value),
+        edgeSquash: Number(els.edgeWarp.value),
+        hCurve: Number(els.vBow.value),
+        perspective: Number(els.perspective.value),
+        scaleX: Number(els.scaleX.value),
+        scaleY: Number(els.scaleY.value),
+        offsetX: Number(els.offsetX.value) / 100,
+      }
+    : { ...PROJECTION_OFF };
+
   return {
     labelWidth: Number(els.labelWidth.value) || DEFAULTS.labelWidth,
     labelHeight: Number(els.labelHeight.value) || DEFAULTS.labelHeight,
     lockLabelSize: els.lockLabelSize?.checked ?? DEFAULTS.lockLabelSize,
     labelScale: Math.max(0.05, Number(els.labelScale?.value) || DEFAULTS.labelScale),
-    wrap: Number(els.curvature.value),
-    edgeSquash: Number(els.edgeWarp.value),
-    hCurve: Number(els.vBow.value),
-    perspective: Number(els.perspective.value),
-    scaleX: Number(els.scaleX.value),
-    scaleY: Number(els.scaleY.value),
+    projectionEnabled,
+    ...projection,
     rotateDeg: Number(els.rotate.value),
-    offsetX: Number(els.offsetX.value) / 100,
     offsetY: Number(els.offsetY.value) / 100,
     edgeFade: Number(els.edgeFade.value),
     fadeStart: Number(els.fadeStart.value) / 100,
@@ -609,14 +653,15 @@ function readControls() {
 function updateLabels() {
   const c = readControls();
   const g = bottleGeometry(c);
-  els.curvatureVal.textContent = c.wrap.toFixed(2);
-  els.edgeWarpVal.textContent = c.edgeSquash.toFixed(2);
-  els.vBowVal.textContent = c.hCurve.toFixed(2);
-  els.perspectiveVal.textContent = c.perspective.toFixed(2);
-  els.scaleXVal.textContent = c.scaleX.toFixed(2);
-  els.scaleYVal.textContent = c.scaleY.toFixed(2);
+  // Show stored slider values even when projection is bypassed
+  els.curvatureVal.textContent = Number(els.curvature.value).toFixed(2);
+  els.edgeWarpVal.textContent = Number(els.edgeWarp.value).toFixed(2);
+  els.vBowVal.textContent = Number(els.vBow.value).toFixed(2);
+  els.perspectiveVal.textContent = Number(els.perspective.value).toFixed(2);
+  els.scaleXVal.textContent = Number(els.scaleX.value).toFixed(2);
+  els.scaleYVal.textContent = Number(els.scaleY.value).toFixed(2);
   els.rotateVal.textContent = `${c.rotateDeg.toFixed(1)}°`;
-  els.offsetXVal.textContent = `${(c.offsetX * 100).toFixed(1)}%`;
+  els.offsetXVal.textContent = `${Number(els.offsetX.value).toFixed(1)}%`;
   els.offsetYVal.textContent = `${(c.offsetY * 100).toFixed(1)}%`;
   els.edgeFadeVal.textContent = c.edgeFade.toFixed(2);
   els.fadeStartVal.textContent = `${Math.round(c.fadeStart * 100)}%`;
@@ -627,6 +672,7 @@ function updateLabels() {
   if (els.outW) els.outW.disabled = !mockupExport;
   if (els.outH) els.outH.disabled = !mockupExport;
   syncLabelSizeLockUi();
+  syncProjectionUi();
   const vessel = activeVessel();
   els.bottleStats.textContent =
     `${vessel.name} · Ø${vessel.diameter} × ${vessel.height} mm · circ. ${g.circumference.toFixed(1)} mm`;
@@ -754,11 +800,13 @@ function hexToRgb(hex) {
  *
  * Paper = bright + near-neutral (typical PDF page gray). Chromatic pixels are
  * always kept as ink even when light, so brand colors don't vanish.
+ * Opaque blend → solid ink (full alpha); other blends keep soft luminance coverage.
  */
 function styleArtworkSample(rgba, controls) {
   const [cr, cg, cb] = hexToRgb(controls.artColor);
   const a0 = rgba[3];
   if (a0 < 0.5) return [cr, cg, cb, 0];
+  const solidInk = resolveArtBlend(controls.artBlend) === "opaque";
 
   const r = rgba[0];
   const g = rgba[1];
@@ -775,6 +823,15 @@ function styleArtworkSample(rgba, controls) {
     let ink = 1 - lum;
     ink = Math.max(0, (ink - 0.04) / 0.96);
     if (ink < 0.004) return [pr, pg, pb, a0];
+    if (solidInk) {
+      const cover = ink < 0.2 ? ink / 0.2 : 1;
+      return [
+        cr * cover + pr * (1 - cover),
+        cg * cover + pg * (1 - cover),
+        cb * cover + pb * (1 - cover),
+        a0,
+      ];
+    }
     const a = Math.min(1, ink);
     return [cr * a + pr * (1 - a), cg * a + pg * (1 - a), cb * a + pb * (1 - a), a0];
   }
@@ -785,11 +842,16 @@ function styleArtworkSample(rgba, controls) {
   }
 
   // Neutral matte: black → full ink, true paper (≥ ~92% / PDF gray ~235+) → clear.
-  // Soft falloff keeps anti-aliased type; mid grays stay visible as ink.
   const paper = Math.max(lum, minC);
   let ink = 1 - paper;
   ink = Math.max(0, (ink - 0.08) / 0.92);
   if (ink < 0.004) return [cr, cg, cb, 0];
+
+  if (solidInk) {
+    // Solid coverage — only a thin AA fringe stays soft so type isn't chunky
+    const cover = ink < 0.22 ? ink / 0.22 : 1;
+    return [cr, cg, cb, a0 * cover];
+  }
   return [cr, cg, cb, a0 * ink];
 }
 
@@ -976,8 +1038,8 @@ function paintMockup(ctx, width, height, labelImage, controls) {
   ctx.drawImage(tmp, rect.lx, rect.ly, rect.labelW, rect.labelH);
   ctx.globalCompositeOperation = "source-over";
 
-  if (mockupHighlights) {
-    // Restore glass speculars only through ink — never wash the open label area
+  // Speculars through ink look like translucency — skip for solid opaque labels
+  if (mockupHighlights && resolveArtBlend(controls.artBlend) !== "opaque") {
     const shine = document.createElement("canvas");
     shine.width = lw;
     shine.height = lh;
@@ -2427,6 +2489,7 @@ function resetControls() {
   const vessel = activeVessel();
   els.lockLabelSize.checked = DEFAULTS.lockLabelSize;
   els.labelScale.value = DEFAULTS.labelScale;
+  els.projectionEnabled.checked = DEFAULTS.projectionEnabled;
   if (!applyNativeLabelSize({ force: true })) {
     els.labelWidth.value = vessel.defaultLabelWidth;
     els.labelHeight.value = vessel.defaultLabelHeight;
@@ -2514,6 +2577,7 @@ function bindUi() {
     els.labelWidth,
     els.labelHeight,
     els.labelScale,
+    els.projectionEnabled,
     els.curvature,
     els.edgeWarp,
     els.vBow,
