@@ -156,6 +156,15 @@
         <fieldset>
           <legend>Output</legend>
           <div class="row">
+            <label class="field grow">
+              Export
+              <select id="export-target">
+                <option value="artwork" selected>Artwork only</option>
+                <option value="mockup">Bottle mockup</option>
+              </select>
+            </label>
+          </div>
+          <div class="row">
             <label class="field">W <input id="out-w" type="number" min="200" max="8000" value="424" step="1" /></label>
             <label class="field">H <input id="out-h" type="number" min="200" max="8000" value="2068" step="1" /></label>
           </div>
@@ -204,6 +213,6 @@
       </main>
     </div>
 
-    <script type="module" src="app.js?v=20260811-compact-ui"></script>
+    <script type="module" src="app.js?v=20260811-export-art"></script>
   </body>
 </html>

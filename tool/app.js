@@ -35,6 +35,7 @@ const els = {
   artColor: $("art-color"),
   paperColor: $("paper-color"),
   artBlend: $("art-blend"),
+  exportTarget: $("export-target"),
   outW: $("out-w"),
   outH: $("out-h"),
   bgMode: $("bg-mode"),
@@ -188,6 +189,7 @@ const DEFAULTS = {
   artColor: "#000000",
   paperColor: "#ffffff",
   artBlend: "opaque",
+  exportTarget: "artwork",
   outW: 424,
   outH: 2068,
   bgMode: "transparent",
@@ -196,6 +198,12 @@ const DEFAULTS = {
   sourceDpi: 300,
   pathDetail: 12,
 };
+
+const EXPORT_TARGETS = new Set(["artwork", "mockup"]);
+
+function resolveExportTarget(value) {
+  return EXPORT_TARGETS.has(value) ? value : DEFAULTS.exportTarget;
+}
 
 const STORAGE_KEY = "pelham-cylinder-wrap-v1";
 const MM_TO_PT = 72 / 25.4;
@@ -432,6 +440,7 @@ function collectSettings() {
     artColor: els.artColor.value,
     paperColor: els.paperColor.value,
     artBlend: els.artBlend.value,
+    exportTarget: els.exportTarget.value,
     outW: els.outW.value,
     outH: els.outH.value,
     bgMode: els.bgMode.value,
@@ -474,6 +483,9 @@ function applySettings(s) {
   setVal(els.paperColor, "paperColor");
   if (s.artBlend != null && ART_BLEND_OPS[s.artBlend] && els.artBlend) {
     els.artBlend.value = s.artBlend;
+  }
+  if (s.exportTarget != null && EXPORT_TARGETS.has(s.exportTarget) && els.exportTarget) {
+    els.exportTarget.value = s.exportTarget;
   }
   setVal(els.outW, "outW");
   setVal(els.outH, "outH");
@@ -526,6 +538,7 @@ function readControls() {
     artColor: els.artColor.value || DEFAULTS.artColor,
     paperColor: els.paperColor?.value || DEFAULTS.paperColor,
     artBlend: resolveArtBlend(els.artBlend?.value || DEFAULTS.artBlend),
+    exportTarget: resolveExportTarget(els.exportTarget?.value || DEFAULTS.exportTarget),
     outW: Math.max(64, Math.round(Number(els.outW.value) || DEFAULTS.outW)),
     outH: Math.max(64, Math.round(Number(els.outH.value) || DEFAULTS.outH)),
     bgMode: els.bgMode.value,
@@ -551,6 +564,9 @@ function updateLabels() {
   els.cropVal.textContent = `${(c.crop * 100).toFixed(1)}%`;
   els.bgColor.disabled = c.bgMode !== "solid";
   if (els.paperColor) els.paperColor.disabled = c.knockoutWhite;
+  const mockupExport = c.exportTarget === "mockup";
+  if (els.outW) els.outW.disabled = !mockupExport;
+  if (els.outH) els.outH.disabled = !mockupExport;
   const vessel = activeVessel();
   els.bottleStats.textContent =
     `${vessel.name} · Ø${vessel.diameter} × ${vessel.height} mm · circ. ${g.circumference.toFixed(1)} mm`;
@@ -1217,32 +1233,51 @@ function setExportBusy(busy) {
 async function exportPng() {
   if (!sourceData) return;
   const controls = readControls();
-  setStatus("Exporting PNG…");
+  const artworkOnly = controls.exportTarget !== "mockup";
+  setStatus(artworkOnly ? "Exporting artwork PNG…" : "Exporting mockup PNG…");
   setExportBusy(true);
 
   await new Promise((r) => setTimeout(r, 20));
   try {
-    const canvas = document.createElement("canvas");
-    canvas.width = controls.outW;
-    canvas.height = controls.outH;
-    const ctx = canvas.getContext("2d");
+    let canvas;
+    let statusNote;
 
-    if (controls.showMockup && mockupImage) {
-      const rect = mockupBodyRect(controls.outW, controls.outH, controls);
-      const lw = Math.max(64, Math.round(rect.labelW));
-      const lh = Math.max(64, Math.round(rect.labelH));
-      const labelImage = warpToImageData(sourceData, { ...controls, scaleY: 1 }, lw, lh);
-      paintMockup(ctx, controls.outW, controls.outH, labelImage, controls);
+    if (artworkOnly) {
+      const dpi = Math.max(150, Math.min(600, Number(els.sourceDpi.value) || 300));
+      const rendered = renderWarpedArtworkCanvas(controls, dpi);
+      canvas = document.createElement("canvas");
+      canvas.width = rendered.canvas.width;
+      canvas.height = rendered.canvas.height;
+      const ctx = canvas.getContext("2d");
+      if (controls.bgMode === "solid") {
+        ctx.fillStyle = controls.bgColor;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+      }
+      ctx.drawImage(rendered.canvas, 0, 0);
+      statusNote = `${rendered.mmW.toFixed(1)}×${rendered.mmH.toFixed(1)} mm · ${canvas.width}×${canvas.height}px @ ${rendered.dpi}dpi`;
     } else {
-      const image = warpToImageData(sourceData, controls, controls.outW, controls.outH);
-      ctx.putImageData(image, 0, 0);
+      canvas = document.createElement("canvas");
+      canvas.width = controls.outW;
+      canvas.height = controls.outH;
+      const ctx = canvas.getContext("2d");
+      if (mockupImage) {
+        const rect = mockupBodyRect(controls.outW, controls.outH, controls);
+        const lw = Math.max(64, Math.round(rect.labelW));
+        const lh = Math.max(64, Math.round(rect.labelH));
+        const labelImage = warpToImageData(sourceData, { ...controls, scaleY: 1 }, lw, lh);
+        paintMockup(ctx, controls.outW, controls.outH, labelImage, controls);
+      } else {
+        const image = warpToImageData(sourceData, controls, controls.outW, controls.outH);
+        ctx.putImageData(image, 0, 0);
+      }
+      statusNote = `${controls.outW}×${controls.outH}px`;
     }
 
     const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
     if (!blob) throw new Error("PNG export failed");
-    const suffix = controls.showMockup ? "mockup" : "cylinder";
+    const suffix = artworkOnly ? "warped" : "mockup";
     downloadBlob(blob, `${exportBaseName()}-${suffix}-${exportStamp()}.png`);
-    setStatus(`Exported ${controls.outW}×${controls.outH} PNG`);
+    setStatus(`Exported ${artworkOnly ? "artwork" : "mockup"} PNG (${statusNote})`);
   } catch (err) {
     console.error(err);
     setStatus(err?.message || "PNG export failed");
@@ -1989,6 +2024,10 @@ async function getVectorPathSet() {
 async function exportSvg() {
   if (!sourceData) return;
   const controls = readControls();
+  if (controls.exportTarget === "mockup") {
+    setStatus("SVG export is artwork-only — switch Export to “Artwork only”");
+    return;
+  }
   setStatus("Exporting warped artwork SVG…");
   setExportBusy(true);
   await new Promise((r) => setTimeout(r, 20));
@@ -2023,6 +2062,10 @@ async function exportSvg() {
 async function exportPdf() {
   if (!sourceData) return;
   const controls = readControls();
+  if (controls.exportTarget === "mockup") {
+    setStatus("PDF export is artwork-only — switch Export to “Artwork only”");
+    return;
+  }
   setStatus("Exporting warped artwork PDF…");
   setExportBusy(true);
   await new Promise((r) => setTimeout(r, 20));
@@ -2274,6 +2317,7 @@ function resetControls() {
   els.artColor.value = DEFAULTS.artColor;
   els.paperColor.value = DEFAULTS.paperColor;
   els.artBlend.value = DEFAULTS.artBlend;
+  els.exportTarget.value = DEFAULTS.exportTarget;
   els.outW.value = vessel.defaultOutW;
   els.outH.value = vessel.defaultOutH;
   els.bgMode.value = DEFAULTS.bgMode;
@@ -2358,6 +2402,7 @@ function bindUi() {
     els.artColor,
     els.paperColor,
     els.artBlend,
+    els.exportTarget,
     els.outW,
     els.outH,
     els.bgMode,
