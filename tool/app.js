@@ -36,10 +36,7 @@ const els = {
   edgeFade: $("edge-fade"),
   fadeStart: $("fade-start"),
   crop: $("crop"),
-  clipCylinder: $("clip-cylinder"),
-  showGuides: $("show-guides"),
   showMockup: $("show-mockup"),
-  matchAspect: $("match-aspect"),
   knockoutWhite: $("knockout-white"),
   artColor: $("art-color"),
   paperColor: $("paper-color"),
@@ -179,10 +176,7 @@ const DEFAULTS = {
   edgeFade: 0,
   fadeStart: 60,
   crop: 0,
-  clipCylinder: true,
-  showGuides: true,
   showMockup: true,
-  matchAspect: true,
   knockoutWhite: true,
   artColor: "#000000",
   paperColor: "#ffffff",
@@ -572,10 +566,7 @@ function collectSettings() {
     edgeFade: els.edgeFade.value,
     fadeStart: els.fadeStart.value,
     crop: els.crop.value,
-    clipCylinder: els.clipCylinder.checked,
-    showGuides: els.showGuides.checked,
     showMockup: els.showMockup.checked,
-    matchAspect: els.matchAspect.checked,
     knockoutWhite: els.knockoutWhite.checked,
     artColor: els.artColor.value,
     paperColor: els.paperColor.value,
@@ -612,10 +603,7 @@ function applySettings(s) {
   setVal(els.edgeFade, "edgeFade");
   setVal(els.fadeStart, "fadeStart");
   setVal(els.crop, "crop");
-  setCheck(els.clipCylinder, "clipCylinder");
-  setCheck(els.showGuides, "showGuides");
   setCheck(els.showMockup, "showMockup");
-  setCheck(els.matchAspect, "matchAspect");
   setCheck(els.knockoutWhite, "knockoutWhite");
   setVal(els.artColor, "artColor");
   setVal(els.paperColor, "paperColor");
@@ -666,10 +654,8 @@ function readControls() {
     edgeFade: Number(els.edgeFade.value),
     fadeStart: Number(els.fadeStart.value) / 100,
     crop: Number(els.crop.value) / 100,
-    clipCylinder: els.clipCylinder.checked,
-    showGuides: els.showGuides.checked,
+    clipCylinder: true,
     showMockup: els.showMockup.checked,
-    matchAspect: els.matchAspect.checked,
     knockoutWhite: els.knockoutWhite.checked,
     artColor: els.artColor.value || DEFAULTS.artColor,
     paperColor: els.paperColor?.value || DEFAULTS.paperColor,
@@ -948,7 +934,6 @@ function warpToImageData(src, controls, width, height) {
 
   const crop = controls.crop;
   const usableHalf = Math.max(0.01, 1 - crop);
-  const clip = controls.clipCylinder;
 
   const [br, bg, bb] = hexToRgb(controls.bgColor);
   const solidBg = controls.bgMode === "solid";
@@ -961,7 +946,7 @@ function warpToImageData(src, controls, width, height) {
       const nxRaw = ((px + 0.5) / width) * 2 - 1; // -1..1 across canvas
       const absX = Math.abs(nxRaw);
 
-      if (clip && absX > usableHalf) {
+      if (absX > usableHalf) {
         if (solidBg) {
           dst[i] = br;
           dst[i + 1] = bg;
@@ -1050,6 +1035,8 @@ function canvasToImageData(canvas) {
 }
 
 const GUIDE_MAGENTA = "rgba(255, 0, 255, 0.95)";
+const GUIDE_MAGENTA_SOFT = "rgba(255, 0, 255, 0.14)";
+const GUIDE_MAGENTA_BLEND = "rgba(255, 0, 255, 0.55)";
 
 function drawGuides(ctx, width, height, controls) {
   const crop = controls.crop;
@@ -1063,37 +1050,7 @@ function drawGuides(ctx, width, height, controls) {
   ctx.setLineDash([]);
   ctx.strokeRect(left, 0, bandW, height);
   ctx.restore();
-  drawCurveStartGuides(ctx, left, 0, bandW, height, controls.curveStart, lwGuide);
-  if (!controls.showGuides) return;
-  const usableHalf = Math.max(0.01, 1 - crop);
-  const fadeX = (controls.fadeStart * usableHalf + 1) / 2;
-  const fadeLeft = (1 - fadeX) * width;
-  const fadeRight = fadeX * width;
-
-  ctx.save();
-  ctx.strokeStyle = "rgba(0, 0, 0, 0.45)";
-  ctx.lineWidth = Math.max(1, width * 0.0015);
-  ctx.setLineDash([6, 4]);
-  ctx.beginPath();
-  ctx.moveTo(left, 0);
-  ctx.lineTo(left, height);
-  ctx.moveTo(right, 0);
-  ctx.lineTo(right, height);
-  ctx.moveTo(width / 2, 0);
-  ctx.lineTo(width / 2, height);
-  ctx.stroke();
-  if (controls.edgeFade > 0) {
-    ctx.strokeStyle = "rgba(0, 0, 0, 0.25)";
-    ctx.beginPath();
-    ctx.moveTo(fadeLeft, 0);
-    ctx.lineTo(fadeLeft, height);
-    ctx.moveTo(fadeRight, 0);
-    ctx.lineTo(fadeRight, height);
-    ctx.stroke();
-  }
-  ctx.setLineDash([]);
-  ctx.strokeRect(left, 0, right - left, height);
-  ctx.restore();
+  drawCurveGuides(ctx, left, 0, bandW, height, controls.curveStart, controls.curveBlend, lwGuide);
 }
 
 function mockupBodyRect(width, height, controls) {
@@ -1248,22 +1205,23 @@ function renderPreview() {
 function drawGuidesOnMockup(ctx, width, height, controls) {
   const rect = mockupBodyRect(width, height, controls);
   const lwGuide = Math.max(1, width * 0.0025);
-  // Artwork outline + curve-start lines (always on)
+  // Artwork outline + curve-start / blend guides
   ctx.save();
   ctx.strokeStyle = GUIDE_MAGENTA;
   ctx.lineWidth = lwGuide;
   ctx.setLineDash([]);
   ctx.strokeRect(rect.lx, rect.ly, rect.labelW, rect.labelH);
   ctx.restore();
-  drawCurveStartGuides(ctx, rect.lx, rect.ly, rect.labelW, rect.labelH, controls.curveStart, lwGuide);
-  if (!controls.showGuides) return;
-  ctx.save();
-  ctx.strokeStyle = "rgba(255,255,255,0.55)";
-  ctx.lineWidth = Math.max(1, width * 0.003);
-  ctx.setLineDash([6, 4]);
-  ctx.strokeRect(rect.panelLeft, rect.panelTop, rect.panelW, rect.panelH);
-  ctx.setLineDash([]);
-  ctx.restore();
+  drawCurveGuides(
+    ctx,
+    rect.lx,
+    rect.ly,
+    rect.labelW,
+    rect.labelH,
+    controls.curveStart,
+    controls.curveBlend,
+    lwGuide,
+  );
 }
 
 function downloadBlob(blob, filename) {
@@ -1353,20 +1311,48 @@ function sourceUVToOutputXY(u, v, controls, outW, outH) {
   };
 }
 
-/** Vertical lines at ±curveStart on a label rect. */
-function drawCurveStartGuides(ctx, lx, ly, labelW, labelH, curveStart, lineWidth) {
+/**
+ * Curve-start lines at ±curveStart, plus blend zone to where edge curve is full strength.
+ * Blend end nx = start + blend × (1 − start).
+ */
+function drawCurveGuides(ctx, lx, ly, labelW, labelH, curveStart, curveBlend, lineWidth) {
   const start = Math.max(0, Math.min(1, curveStart));
+  const blend = Math.max(0, Math.min(1, curveBlend || 0));
   const cx = lx + labelW / 2;
-  const half = (labelW / 2) * start;
+  const halfW = labelW / 2;
+  const startHalf = halfW * start;
+  const blendEnd = start + blend * (1 - start);
+  const blendHalf = halfW * blendEnd;
+
   ctx.save();
+
+  // Soft band: curve ramping from start → full (only when blend > 0)
+  if (blend > 0.01 && blendHalf > startHalf + 0.5) {
+    const bandW = blendHalf - startHalf;
+    ctx.fillStyle = GUIDE_MAGENTA_SOFT;
+    ctx.fillRect(cx - blendHalf, ly, bandW, labelH);
+    ctx.fillRect(cx + startHalf, ly, bandW, labelH);
+
+    ctx.strokeStyle = GUIDE_MAGENTA_BLEND;
+    ctx.lineWidth = Math.max(1, lineWidth * 0.85);
+    ctx.setLineDash([2, 5]);
+    ctx.beginPath();
+    ctx.moveTo(cx - blendHalf, ly);
+    ctx.lineTo(cx - blendHalf, ly + labelH);
+    ctx.moveTo(cx + blendHalf, ly);
+    ctx.lineTo(cx + blendHalf, ly + labelH);
+    ctx.stroke();
+  }
+
+  // Curve start (inner edge of the blend)
   ctx.strokeStyle = GUIDE_MAGENTA;
   ctx.lineWidth = lineWidth;
   ctx.setLineDash([4, 4]);
   ctx.beginPath();
-  ctx.moveTo(cx - half, ly);
-  ctx.lineTo(cx - half, ly + labelH);
-  ctx.moveTo(cx + half, ly);
-  ctx.lineTo(cx + half, ly + labelH);
+  ctx.moveTo(cx - startHalf, ly);
+  ctx.lineTo(cx - startHalf, ly + labelH);
+  ctx.moveTo(cx + startHalf, ly);
+  ctx.lineTo(cx + startHalf, ly + labelH);
   ctx.stroke();
   ctx.setLineDash([]);
   ctx.restore();
@@ -1503,7 +1489,6 @@ function drawFrontView(controls) {
 }
 
 function syncOutputAspect(controls) {
-  if (!controls.matchAspect) return;
   const h = controls.outH;
   let aspect;
   if (controls.showMockup && mockupImage) {
@@ -2252,7 +2237,6 @@ function warpControlsForExport(controls) {
     ...controls,
     artColor: printInkColor(controls),
     bgMode: "transparent",
-    showGuides: false,
   };
 }
 
@@ -2761,10 +2745,7 @@ function resetControls() {
   els.edgeFade.value = DEFAULTS.edgeFade;
   els.fadeStart.value = DEFAULTS.fadeStart;
   els.crop.value = DEFAULTS.crop;
-  els.clipCylinder.checked = DEFAULTS.clipCylinder;
-  els.showGuides.checked = DEFAULTS.showGuides;
   els.showMockup.checked = DEFAULTS.showMockup;
-  els.matchAspect.checked = DEFAULTS.matchAspect;
   els.knockoutWhite.checked = DEFAULTS.knockoutWhite;
   els.artColor.value = DEFAULTS.artColor;
   els.paperColor.value = DEFAULTS.paperColor;
@@ -2781,24 +2762,17 @@ function resetControls() {
 function fitOutputToSource() {
   if (!sourceCanvas) return;
   const controls = readControls();
-  if (controls.matchAspect) {
-    const h = Math.min(2400, Math.max(400, Math.round(sourceCanvas.height)));
-    els.outH.value = h;
-    let aspect;
-    if (controls.showMockup && mockupImage) {
-      const { w: mw, h: mh } = mockupSize(mockupImage);
-      aspect = mw / mh;
-    } else {
-      const g = bottleGeometry(controls);
-      aspect = g.width / g.labelHeight;
-    }
-    els.outW.value = Math.max(64, Math.round(h * aspect));
+  const h = Math.min(2400, Math.max(400, Math.round(sourceCanvas.height)));
+  els.outH.value = h;
+  let aspect;
+  if (controls.showMockup && mockupImage) {
+    const { w: mw, h: mh } = mockupSize(mockupImage);
+    aspect = mw / mh;
   } else {
-    const maxW = 2400;
-    const scale = Math.min(1, maxW / sourceCanvas.width);
-    els.outW.value = Math.round(sourceCanvas.width * scale);
-    els.outH.value = Math.round(sourceCanvas.height * scale);
+    const g = bottleGeometry(controls);
+    aspect = g.width / g.labelHeight;
   }
+  els.outW.value = Math.max(64, Math.round(h * aspect));
   scheduleRender();
 }
 
@@ -2843,10 +2817,7 @@ function bindUi() {
     els.edgeFade,
     els.fadeStart,
     els.crop,
-    els.clipCylinder,
-    els.showGuides,
     els.showMockup,
-    els.matchAspect,
     els.knockoutWhite,
     els.artColor,
     els.paperColor,
