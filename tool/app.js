@@ -737,17 +737,32 @@ function smoothstep01(t) {
 }
 
 /**
- * How strongly the outer (edge) curve is active at |nx|.
- * 0 at/inside curve-start; with blend, ramps up over that fraction of the outer band.
+ * Blend zone around curve-start: returns [lo, hi] in |nx| where weight goes 0→1.
+ * blend=0 → hard split at start; blend=1 → zone spans center→rim.
+ */
+function curveBlendZone(curveStart, curveBlend) {
+  const start = Math.max(0, Math.min(0.999, curveStart));
+  const blend = Math.max(0, Math.min(1, curveBlend));
+  if (blend <= 1e-6) return { start, lo: start, hi: start, blend: 0 };
+  return {
+    start,
+    lo: start - blend * start,
+    hi: start + blend * (1 - start),
+    blend,
+  };
+}
+
+/**
+ * How strongly the edge curve is active at |nx|.
+ * 0 = pure inner · 1 = pure edge · blend softens across the curve-start line.
  */
 function edgeRegionWeight(ax, curveStart, curveBlend) {
-  const start = Math.max(0, Math.min(0.999, curveStart));
   const a = Math.max(0, Math.min(1, ax));
-  if (a <= start) return 0;
-  const blend = Math.max(0, Math.min(1, curveBlend));
-  if (blend <= 1e-6) return 1;
-  const t = (a - start) / Math.max(1e-6, 1 - start);
-  return smoothstep01(t / blend);
+  const z = curveBlendZone(curveStart, curveBlend);
+  if (z.blend <= 1e-6) return a <= z.start ? 0 : 1;
+  if (a <= z.lo) return 0;
+  if (a >= z.hi) return 1;
+  return smoothstep01((a - z.lo) / Math.max(1e-6, z.hi - z.lo));
 }
 
 /** Hard-split map: inner inside ±start, edge outside. */
@@ -770,15 +785,16 @@ function mapNxToSourceHard(nx, edgeCurve, curveStart, innerCurve) {
 /**
  * Map label x (-1..1) → source x (-1..1).
  * Inside ±curveStart: innerCurve · Outside: edgeCurve
- * curveBlend softens the outer curve onset past the start lines (0 = hard, 1 = full outer ramp).
+ * curveBlend crossfades the two across the start line (0 = hard split, 1 = widest fade).
  */
 function mapNxToSource(nx, edgeCurve, curveStart, innerCurve = 0, curveBlend = 0) {
   const x = Math.max(-1, Math.min(1, nx));
   const w = edgeRegionWeight(Math.abs(x), curveStart, curveBlend);
+  // Inner-only vs edge-only fields, then crossfade — avoids a kink at the start line.
   if (w <= 1e-6) return mapNxToSourceHard(x, 0, curveStart, innerCurve);
-  if (w >= 1 - 1e-6) return mapNxToSourceHard(x, edgeCurve, curveStart, innerCurve);
+  if (w >= 1 - 1e-6) return mapNxToSourceHard(x, edgeCurve, curveStart, 0);
   const sInner = mapNxToSourceHard(x, 0, curveStart, innerCurve);
-  const sEdge = mapNxToSourceHard(x, edgeCurve, curveStart, innerCurve);
+  const sEdge = mapNxToSourceHard(x, edgeCurve, curveStart, 0);
   return sInner * (1 - w) + sEdge * w;
 }
 
@@ -790,11 +806,12 @@ function verticalCurveAmount(nx, vertCurve, curveStart, curveBlend = 0) {
   const start = Math.max(0, Math.min(0.999, curveStart));
   const w = edgeRegionWeight(ax, start, curveBlend);
   if (w <= 1e-6) return 0;
-  const t = (ax - start) / Math.max(1e-6, 1 - start);
-  const smooth = t * t * (3 - 2 * t);
-  // With no blend, keep the soft rise across the outer band; with blend, onset follows w.
-  const rise = curveBlend <= 1e-6 ? smooth : w;
-  return amt * 0.22 * rise;
+  if (curveBlend <= 1e-6) {
+    const t = (ax - start) / Math.max(1e-6, 1 - start);
+    return amt * 0.22 * (t * t * (3 - 2 * t));
+  }
+  // Blend: bow fades in across the same zone as the edge curve
+  return amt * 0.22 * w;
 }
 
 function mapSourceToNx(s, edgeCurve, curveStart, innerCurve = 0, curveBlend = 0) {
@@ -1037,6 +1054,7 @@ function canvasToImageData(canvas) {
 const GUIDE_MAGENTA = "rgba(255, 0, 255, 0.95)";
 const GUIDE_MAGENTA_SOFT = "rgba(255, 0, 255, 0.14)";
 const GUIDE_MAGENTA_BLEND = "rgba(255, 0, 255, 0.55)";
+const GUIDE_GREEN = "rgba(0, 255, 70, 0.95)";
 
 function drawGuides(ctx, width, height, controls) {
   const crop = controls.crop;
@@ -1051,6 +1069,7 @@ function drawGuides(ctx, width, height, controls) {
   ctx.strokeRect(left, 0, bandW, height);
   ctx.restore();
   drawCurveGuides(ctx, left, 0, bandW, height, controls.curveStart, controls.curveBlend, lwGuide);
+  drawFadeStartGuides(ctx, left, 0, bandW, height, controls.fadeStart, lwGuide);
 }
 
 function mockupBodyRect(width, height, controls) {
@@ -1113,34 +1132,35 @@ function paintMockup(ctx, width, height, labelImage, controls) {
   tmp.height = lh;
   tmp.getContext("2d").putImageData(labelImage, 0, 0);
 
+  // Composite label in a layer, then clip to the bottle silhouette (same cut as export).
+  const labelLayer = document.createElement("canvas");
+  labelLayer.width = width;
+  labelLayer.height = height;
+  const lctx = labelLayer.getContext("2d");
+  lctx.drawImage(tmp, rect.lx, rect.ly, rect.labelW, rect.labelH);
+  if (mockupImage) {
+    lctx.globalCompositeOperation = "destination-in";
+    lctx.drawImage(mockupImage, 0, 0, width, height);
+    lctx.globalCompositeOperation = "source-over";
+  }
+
   ctx.save();
-  // Paper is alpha-0 when knockout is on; blend mode controls how ink sits on glass.
   ctx.globalCompositeOperation = artBlendOp(controls.artBlend);
-  ctx.drawImage(tmp, rect.lx, rect.ly, rect.labelW, rect.labelH);
+  ctx.drawImage(labelLayer, 0, 0);
   ctx.globalCompositeOperation = "source-over";
 
   // Speculars through ink look like translucency — skip for solid opaque labels
   if (mockupHighlights && resolveArtBlend(controls.artBlend) !== "opaque") {
     const shine = document.createElement("canvas");
-    shine.width = lw;
-    shine.height = lh;
+    shine.width = width;
+    shine.height = height;
     const sctx = shine.getContext("2d");
-    sctx.drawImage(
-      mockupHighlights,
-      rect.lx,
-      rect.ly,
-      rect.labelW,
-      rect.labelH,
-      0,
-      0,
-      lw,
-      lh
-    );
+    sctx.drawImage(mockupHighlights, 0, 0, width, height);
     sctx.globalCompositeOperation = "destination-in";
-    sctx.drawImage(tmp, 0, 0);
+    sctx.drawImage(labelLayer, 0, 0);
     ctx.globalCompositeOperation = "screen";
     ctx.globalAlpha = activeMockup().highlightStrength;
-    ctx.drawImage(shine, rect.lx, rect.ly, rect.labelW, rect.labelH);
+    ctx.drawImage(shine, 0, 0);
     ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = "source-over";
   }
@@ -1222,6 +1242,7 @@ function drawGuidesOnMockup(ctx, width, height, controls) {
     controls.curveBlend,
     lwGuide,
   );
+  drawFadeStartGuides(ctx, rect.lx, rect.ly, rect.labelW, rect.labelH, controls.fadeStart, lwGuide);
 }
 
 function downloadBlob(blob, filename) {
@@ -1312,39 +1333,42 @@ function sourceUVToOutputXY(u, v, controls, outW, outH) {
 }
 
 /**
- * Curve-start lines at ±curveStart, plus blend zone to where edge curve is full strength.
- * Blend end nx = start + blend × (1 − start).
+ * Curve-start lines at ±curveStart, plus blend zone straddling those lines
+ * (inner ↔ edge crossfade).
  */
 function drawCurveGuides(ctx, lx, ly, labelW, labelH, curveStart, curveBlend, lineWidth) {
-  const start = Math.max(0, Math.min(1, curveStart));
-  const blend = Math.max(0, Math.min(1, curveBlend || 0));
+  const z = curveBlendZone(curveStart, curveBlend);
   const cx = lx + labelW / 2;
   const halfW = labelW / 2;
-  const startHalf = halfW * start;
-  const blendEnd = start + blend * (1 - start);
-  const blendHalf = halfW * blendEnd;
+  const startHalf = halfW * z.start;
+  const loHalf = halfW * z.lo;
+  const hiHalf = halfW * z.hi;
 
   ctx.save();
 
-  // Soft band: curve ramping from start → full (only when blend > 0)
-  if (blend > 0.01 && blendHalf > startHalf + 0.5) {
-    const bandW = blendHalf - startHalf;
+  // Soft band around the start line (blend > 0)
+  if (z.blend > 0.01 && hiHalf - loHalf > 0.5) {
+    const bandW = hiHalf - loHalf;
     ctx.fillStyle = GUIDE_MAGENTA_SOFT;
-    ctx.fillRect(cx - blendHalf, ly, bandW, labelH);
-    ctx.fillRect(cx + startHalf, ly, bandW, labelH);
+    ctx.fillRect(cx - hiHalf, ly, bandW, labelH);
+    ctx.fillRect(cx + loHalf, ly, bandW, labelH);
 
     ctx.strokeStyle = GUIDE_MAGENTA_BLEND;
     ctx.lineWidth = Math.max(1, lineWidth * 0.85);
     ctx.setLineDash([2, 5]);
     ctx.beginPath();
-    ctx.moveTo(cx - blendHalf, ly);
-    ctx.lineTo(cx - blendHalf, ly + labelH);
-    ctx.moveTo(cx + blendHalf, ly);
-    ctx.lineTo(cx + blendHalf, ly + labelH);
+    ctx.moveTo(cx - loHalf, ly);
+    ctx.lineTo(cx - loHalf, ly + labelH);
+    ctx.moveTo(cx + loHalf, ly);
+    ctx.lineTo(cx + loHalf, ly + labelH);
+    ctx.moveTo(cx - hiHalf, ly);
+    ctx.lineTo(cx - hiHalf, ly + labelH);
+    ctx.moveTo(cx + hiHalf, ly);
+    ctx.lineTo(cx + hiHalf, ly + labelH);
     ctx.stroke();
   }
 
-  // Curve start (inner edge of the blend)
+  // Curve start (center of the blend)
   ctx.strokeStyle = GUIDE_MAGENTA;
   ctx.lineWidth = lineWidth;
   ctx.setLineDash([4, 4]);
@@ -1353,6 +1377,25 @@ function drawCurveGuides(ctx, lx, ly, labelW, labelH, curveStart, curveBlend, li
   ctx.lineTo(cx - startHalf, ly + labelH);
   ctx.moveTo(cx + startHalf, ly);
   ctx.lineTo(cx + startHalf, ly + labelH);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.restore();
+}
+
+/** Bright green lines at ±fadeStart (where edge fade begins). */
+function drawFadeStartGuides(ctx, lx, ly, labelW, labelH, fadeStart, lineWidth) {
+  const start = Math.max(0, Math.min(1, fadeStart));
+  const cx = lx + labelW / 2;
+  const half = (labelW / 2) * start;
+  ctx.save();
+  ctx.strokeStyle = GUIDE_GREEN;
+  ctx.lineWidth = lineWidth;
+  ctx.setLineDash([5, 4]);
+  ctx.beginPath();
+  ctx.moveTo(cx - half, ly);
+  ctx.lineTo(cx - half, ly + labelH);
+  ctx.moveTo(cx + half, ly);
+  ctx.lineTo(cx + half, ly + labelH);
   ctx.stroke();
   ctx.setLineDash([]);
   ctx.restore();
@@ -2190,17 +2233,40 @@ function printInkColor(controls) {
   return art;
 }
 
-/** Export frame = scaled label at native W/H ratio (warped, not bottle mockup). */
-function warpedArtworkExportSize(controls, dpi = 300) {
+/**
+ * Geometric side trim (each side) so export matches the bottle front face.
+ * Wider-than-bottle labels lose wrap-around edges — same cut as the mockup mask.
+ */
+function bottleFaceCrop(controls) {
+  const g = bottleGeometry(controls);
+  const faceMm = Math.min(g.visibleLabelWidth, activeVessel().diameter);
+  const labelMm = Math.max(0.1, g.labelWidth);
+  if (labelMm <= faceMm) return 0;
+  return Math.min(0.45, (labelMm - faceMm) / (2 * labelMm));
+}
+
+function trimCanvasHorizontal(canvas, cropFrac) {
+  const c = Math.max(0, Math.min(0.49, cropFrac));
+  if (c <= 1e-6) return canvas;
+  const x = Math.round(canvas.width * c);
+  const w = Math.max(1, canvas.width - 2 * x);
+  if (w >= canvas.width) return canvas;
+  const out = document.createElement("canvas");
+  out.width = w;
+  out.height = canvas.height;
+  out.getContext("2d").drawImage(canvas, x, 0, w, canvas.height, 0, 0, w, canvas.height);
+  return out;
+}
+
+/** Full-label (pre-trim) export pixel size. */
+function warpedArtworkFullExportSize(controls, dpi = 300) {
   const g = bottleGeometry(controls);
   const mmH = Math.max(5, g.labelHeight);
-  const aspect = g.labelWidth / Math.max(0.1, g.labelHeight);
-  const mmW = Math.max(5, mmH * aspect);
+  const mmW = Math.max(5, g.labelWidth);
   let usedDpi = Math.max(300, Math.min(600, dpi));
   let wPx = Math.max(64, Math.round((mmW / 25.4) * usedDpi));
   let hPx = Math.max(64, Math.round((mmH / 25.4) * usedDpi));
 
-  // Prefer at least source long-edge resolution so fine type isn't undersampled.
   if (sourceData) {
     const srcLong = Math.max(sourceData.width, sourceData.height);
     const outLong = Math.max(wPx, hPx);
@@ -2232,6 +2298,26 @@ function warpedArtworkExportSize(controls, dpi = 300) {
   };
 }
 
+/** Visible (bottle-clipped) export frame. */
+function warpedArtworkExportSize(controls, dpi = 300) {
+  const full = warpedArtworkFullExportSize(controls, dpi);
+  const crop = bottleFaceCrop(controls);
+  const keep = 1 - 2 * crop;
+  const mmW = Math.max(5, full.mmW * keep);
+  const wPx = Math.max(64, Math.round(full.wPx * keep));
+  return {
+    mmW,
+    mmH: full.mmH,
+    wPx,
+    hPx: full.hPx,
+    pageWpt: mmW * MM_TO_PT,
+    pageHpt: full.pageHpt,
+    dpi: full.dpi,
+    crop,
+    full,
+  };
+}
+
 function warpControlsForExport(controls) {
   return {
     ...controls,
@@ -2242,30 +2328,62 @@ function warpControlsForExport(controls) {
 
 /**
  * Cylinder-warped isolated artwork (same projection as the bottle label), rasterized.
- * Supersampled then downscaled so warped edges stay smooth.
+ * Supersampled, then trimmed to the bottle front face (wrap-around edges removed).
  */
 function renderWarpedArtworkCanvas(controls, dpi = 300) {
   if (!sourceData) throw new Error("No source artwork loaded");
   const size = warpedArtworkExportSize(controls, dpi);
+  const full = size.full;
   const canvas = warpToCanvas(
     sourceData,
     warpControlsForExport(controls),
-    size.wPx,
-    size.hPx,
+    full.wPx,
+    full.hPx,
     { ssaa: EXPORT_WARP_SSAA },
   );
-  return { canvas, ...size };
+  const trimmed = trimCanvasHorizontal(canvas, size.crop);
+  return {
+    canvas: trimmed,
+    mmW: size.mmW,
+    mmH: size.mmH,
+    wPx: trimmed.width,
+    hPx: trimmed.height,
+    pageWpt: size.pageWpt,
+    pageHpt: size.pageHpt,
+    dpi: size.dpi,
+  };
+}
+
+/** Shift M/L path coords (used to trim bottle-face margins from vector export). */
+function offsetWarpedPathD(d, dx, dy = 0) {
+  if (!dx && !dy) return d;
+  let out = "";
+  forEachWarpedPathCommand(
+    d,
+    (x, y) => {
+      out += `M${fmt(x - dx)} ${fmt(y - dy)}`;
+    },
+    (x, y) => {
+      out += `L${fmt(x - dx)} ${fmt(y - dy)}`;
+    },
+    () => {
+      out += "Z";
+    },
+  );
+  return out;
 }
 
 /**
- * Warped vector SVG at label-band size. Styles ink like the mockup; returns null if no ink paths.
+ * Warped vector SVG at bottle-visible label size. Styles ink like the mockup; returns null if no ink paths.
  */
 function buildWarpedArtworkSvg(pathSet, controls) {
   const size = warpedArtworkExportSize(controls, 72);
   const ink = printInkColor(controls);
-  const w = size.pageWpt;
+  const fullW = size.full.pageWpt;
   const h = size.pageHpt;
-  const detail = controls.pathDetail;
+  const w = size.pageWpt;
+  const x0 = fullW * size.crop;
+  const detail = Math.max(16, controls.pathDetail || DEFAULTS.pathDetail);
   const wc = warpControlsForExport(controls);
 
   const out = [];
@@ -2273,16 +2391,20 @@ function buildWarpedArtworkSvg(pathSet, controls) {
   out.push(
     `<svg xmlns="http://www.w3.org/2000/svg" width="${fmt(w)}" height="${fmt(h)}" viewBox="0 0 ${fmt(w)} ${fmt(h)}">`,
   );
+  out.push(`<defs><clipPath id="bottleFace"><rect x="0" y="0" width="${fmt(w)}" height="${fmt(h)}"/></clipPath></defs>`);
+  out.push(`<g clip-path="url(#bottleFace)">`);
 
   let count = 0;
   const { paths, w: srcW, h: srcH } = pathSet;
   for (const src of paths) {
     const styled = stylePathForArtworkExport(src, controls, ink);
     if (styled.fill === "none" && styled.stroke === "none") continue;
-    const warped = warpPathD(styled.d, wc, srcW, srcH, w, h, detail);
+    const warped = warpPathD(styled.d, wc, srcW, srcH, fullW, h, detail);
     if (!warped) continue;
+    const trimmed = offsetWarpedPathD(warped, x0);
+    if (!trimmed) continue;
     count++;
-    let attrs = `d="${warped}"`;
+    let attrs = `d="${trimmed}"`;
     attrs += ` fill="${styled.fill}"`;
     if (styled.fill !== "none" && styled.fillOpacity != null && styled.fillOpacity < 1) {
       attrs += ` fill-opacity="${styled.fillOpacity}"`;
@@ -2296,9 +2418,9 @@ function buildWarpedArtworkSvg(pathSet, controls) {
     }
     out.push(`<path ${attrs}/>`);
   }
-  out.push(`</svg>`);
+  out.push(`</g></svg>`);
   if (!count) return null;
-  return { svgText: out.join(""), ...size };
+  return { svgText: out.join(""), mmW: size.mmW, mmH: size.mmH, pageWpt: w, pageHpt: h, dpi: size.dpi };
 }
 
 function buildWarpedArtworkSvgFromRaster(controls) {
@@ -2334,7 +2456,7 @@ function forEachWarpedPathCommand(d, onMove, onLine, onClose) {
 }
 
 /** Draw one warped path as true PDF vector ops (selectable in Illustrator). */
-function drawWarpedPathOnJsPdf(doc, d, styled, strokeScale) {
+function drawWarpedPathOnJsPdf(doc, d, styled, strokeScale, ox = 0, oy = 0) {
   const hasFill = styled.fill && styled.fill !== "none";
   const hasStroke = styled.stroke && styled.stroke !== "none";
   if (!hasFill && !hasStroke) return false;
@@ -2343,11 +2465,11 @@ function drawWarpedPathOnJsPdf(doc, d, styled, strokeScale) {
   forEachWarpedPathCommand(
     d,
     (x, y) => {
-      doc.moveTo(x, y);
+      doc.moveTo(x - ox, y - oy);
       points++;
     },
     (x, y) => {
-      doc.lineTo(x, y);
+      doc.lineTo(x - ox, y - oy);
       points++;
     },
     () => {
@@ -2394,23 +2516,32 @@ async function exportWarpedArtworkPdfFromPaths(pathSet, controls) {
   if (!jsPDFCtor) throw new Error("jsPDF failed to load");
 
   const size = warpedArtworkExportSize(controls, 72);
+  const fullW = Math.max(1, size.full.pageWpt);
   const w = Math.max(1, size.pageWpt);
   const h = Math.max(1, size.pageHpt);
+  const x0 = fullW * size.crop;
   const detail = Math.max(16, Number(controls.pathDetail) || DEFAULTS.pathDetail);
   const wc = warpControlsForExport(controls);
   const ink = printInkColor(controls);
   const { paths, w: srcW, h: srcH } = pathSet;
-  const strokeScale = w / Math.max(1, srcW);
+  const strokeScale = fullW / Math.max(1, srcW);
 
   const doc = new jsPDFCtor({ unit: "pt", format: [w, h], compress: true });
+  // Clip to bottle-visible frame (matches raster trim)
+  try {
+    doc.rect(0, 0, w, h);
+    doc.clip();
+  } catch {
+    /* older jsPDF without clip — page size already trims */
+  }
 
   let pathCount = 0;
   for (const src of paths) {
     const styled = stylePathForArtworkExport(src, { ...controls, artColor: ink }, ink);
     if (styled.fill === "none" && styled.stroke === "none") continue;
-    const warped = warpPathD(styled.d, wc, srcW, srcH, w, h, detail);
+    const warped = warpPathD(styled.d, wc, srcW, srcH, fullW, h, detail);
     if (!warped) continue;
-    if (drawWarpedPathOnJsPdf(doc, warped, styled, strokeScale)) pathCount++;
+    if (drawWarpedPathOnJsPdf(doc, warped, styled, strokeScale, x0, 0)) pathCount++;
   }
 
   if (!pathCount) {
