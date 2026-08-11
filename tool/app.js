@@ -1090,22 +1090,15 @@ function mapNxToSource(nx, edgeCurve, curveStart, innerCurve = 0, curveBlend = 0
 }
 
 /**
- * Vertical bow magnitude past curve-start (fraction of band height).
- * Sign convention at call sites: + → top sides up / bottom sides down; − flips.
+ * Vertical bow magnitude across full width (fraction of band height).
+ * 0 at center → full at L/R edges. Sign: + → top sides up / bottom sides down; − flips.
  */
-function verticalCurveAmount(nx, vertCurve, curveStart, curveBlend = 0) {
+function verticalCurveAmount(nx, vertCurve) {
   const amt = Math.max(-1, Math.min(1, vertCurve));
   if (Math.abs(amt) <= 1e-6) return 0;
-  const ax = Math.abs(Math.max(-1, Math.min(1, nx)));
-  const start = Math.max(0, Math.min(0.999, curveStart));
-  const w = edgeRegionWeight(ax, start, curveBlend);
-  if (w <= 1e-6) return 0;
-  if (curveBlend <= 1e-6) {
-    const t = (ax - start) / Math.max(1e-6, 1 - start);
-    return amt * 0.22 * (t * t * (3 - 2 * t));
-  }
-  // Blend: bow fades in across the same zone as the edge curve
-  return amt * 0.22 * w;
+  const t = Math.abs(Math.max(-1, Math.min(1, nx)));
+  // Smooth ramp center → rim so the bow runs through the whole artwork
+  return amt * 0.22 * (t * t * (3 - 2 * t));
 }
 
 function mapSourceToNx(s, edgeCurve, curveStart, innerCurve = 0, curveBlend = 0) {
@@ -1567,7 +1560,7 @@ function exportBaseName() {
 
 /**
  * Map output (nx, ny) → source UV.
- * Edge curve stretch/condense + vertical bow past curve-start
+ * Edge curve stretch/condense + full-width vertical bow
  * (top L/R one way, bottom L/R the opposite); rotate optional.
  */
 function sampleSourceUV(nx, ny, controls) {
@@ -1579,12 +1572,7 @@ function sampleSourceUV(nx, ny, controls) {
     controls.innerCurve,
     controls.curveBlend,
   );
-  const bow = verticalCurveAmount(
-    nx,
-    controls.vertCurve,
-    controls.curveStart,
-    controls.curveBlend,
-  );
+  const bow = verticalCurveAmount(nx, controls.vertCurve);
   let u = s * 0.5;
   // +vertCurve: top L/R up, bottom L/R down (opposite bows); − flips
   const denom = 1 + 2 * bow;
@@ -1622,12 +1610,7 @@ function sourceUVToOutputXY(u, v, controls, outW, outH) {
     controls.innerCurve,
     controls.curveBlend,
   );
-  const bow = verticalCurveAmount(
-    nx,
-    controls.vertCurve,
-    controls.curveStart,
-    controls.curveBlend,
-  );
+  const bow = verticalCurveAmount(nx, controls.vertCurve);
   // Inverse of sampleSourceUV vert bow: top/bottom sides curve opposite ways
   const srcV = vv + 0.5;
   const ny = srcV - bow * (1 - 2 * srcV);
@@ -1809,7 +1792,7 @@ function drawFrontView(controls) {
   const guideHalf = halfVis * start;
   const g1 = cx - guideHalf;
   const g2 = cx + guideHalf;
-  const bow = verticalCurveAmount(1, controls.vertCurve, controls.curveStart, controls.curveBlend) * lh;
+  const bow = verticalCurveAmount(1, controls.vertCurve) * lh;
   const labelPath =
     `M ${lx.toFixed(2)} ${(ly - bow).toFixed(2)}` +
     ` Q ${cx.toFixed(2)} ${(ly + bow).toFixed(2)} ${lx2.toFixed(2)} ${(ly - bow).toFixed(2)}` +
