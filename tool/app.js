@@ -2533,15 +2533,16 @@ async function reloadPdfPage() {
   }
 }
 
+/** Neutral projection: artwork stays as-uploaded until knobs are moved. */
 function resetProjection() {
-  els.projectionEnabled.checked = DEFAULTS.projectionEnabled;
-  els.curvature.value = DEFAULTS.curvature;
-  els.edgeWarp.value = DEFAULTS.edgeWarp;
-  els.vBow.value = DEFAULTS.vBow;
-  els.perspective.value = DEFAULTS.perspective;
-  els.scaleX.value = DEFAULTS.scaleX;
-  els.scaleY.value = DEFAULTS.scaleY;
-  els.offsetX.value = DEFAULTS.offsetX;
+  els.projectionEnabled.checked = true;
+  els.curvature.value = String(PROJECTION_OFF.wrap);
+  els.edgeWarp.value = String(PROJECTION_OFF.edgeSquash);
+  els.vBow.value = String(PROJECTION_OFF.hCurve);
+  els.perspective.value = String(PROJECTION_OFF.perspective);
+  els.scaleX.value = String(PROJECTION_OFF.scaleX);
+  els.scaleY.value = String(PROJECTION_OFF.scaleY);
+  els.offsetX.value = String(PROJECTION_OFF.offsetX * 100);
   syncProjectionUi();
 }
 
