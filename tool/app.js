@@ -641,21 +641,27 @@ function updateLabels() {
 /**
  * Screen X → cylinder angle θ (radians from label center).
  * nx is -1..1 across the *label* rect (not the full bottle).
- * Orthographic: chord x = R·sin(θ) ⇒ at label edges θ = ±halfArc.
- * wrap blends flat ↔ cylinder foreshortening within that arc.
+ * Edges always map to ±halfArc so U spans the full artwork (keeps native ratio).
+ * wrap blends flat ↔ asin foreshortening within that same angular span.
  */
 function screenXToTheta(nx, wrap, edgeSquash, labelArcRad) {
   const x = Math.max(-1, Math.min(1, nx));
   const halfArc = Math.max(1e-6, labelArcRad / 2);
   const flat = x * halfArc;
-  // Label chord spans ±sin(min(halfArc, π/2)) of the bottle radius.
-  // Small labels must map edges to ±halfArc — not ±π/2 (that stretched sides below ~50%).
-  const maxSin = Math.sin(Math.min(halfArc, Math.PI / 2));
-  let cyl = Math.asin(Math.max(-1, Math.min(1, x * maxSin)));
+
+  let cyl;
+  if (halfArc <= Math.PI / 2) {
+    // Chord model: edges at ±halfArc
+    cyl = Math.asin(Math.max(-1, Math.min(1, x * Math.sin(halfArc))));
+  } else {
+    // Wider than the front silhouette: keep asin foreshortening, but remap
+    // so edges still land on ±halfArc (no U-crop / horizontal squeeze).
+    cyl = (Math.asin(x) / (Math.PI / 2)) * halfArc;
+  }
+
   if (edgeSquash !== 1) {
     const s = Math.max(0.2, edgeSquash);
-    const limit = Math.min(halfArc, Math.PI / 2);
-    const t = Math.sign(cyl) * Math.pow(Math.abs(cyl) / limit, s) * limit;
+    const t = Math.sign(cyl) * Math.pow(Math.abs(cyl) / halfArc, s) * halfArc;
     cyl = t;
   }
   return flat * (1 - wrap) + cyl * wrap;
@@ -909,13 +915,16 @@ function mockupBodyRect(width, height, controls) {
   const panelRight = width * mockup.bodyRightFrac;
   const panelW = Math.max(1, panelRight - panelLeft);
 
-  // Physical label size vs calibrated panel (scale with labelScale via g.*)
+  // Height from physical mm; width from native aspect so scale never stretches.
   const labelH = Math.max(
     2,
     panelH * (g.labelHeight / vessel.labelPanel) * controls.scaleY
   );
-  const visFrac = Math.min(1, Math.max(0.001, g.visibleLabelWidth / g.width));
-  const labelW = Math.max(2, panelW * visFrac * controls.scaleX);
+  const aspect = g.labelWidth / Math.max(0.1, g.labelHeight);
+  const labelW = Math.max(
+    2,
+    labelH * aspect * (controls.scaleX / Math.max(0.001, controls.scaleY)),
+  );
 
   // Free placement — offsets may put the label anywhere on the bottle
   const lx = panelLeft + (panelW - labelW) / 2 + controls.offsetX * panelW;
@@ -1237,14 +1246,19 @@ function drawFrontView(controls) {
 
   const lhMm = Math.max(1, g.labelHeight * controls.scaleY);
   const lh = (lhMm / H) * 100;
+  const aspect = g.labelWidth / Math.max(0.1, g.labelHeight);
+  const lw =
+    lh *
+    aspect *
+    (controls.scaleX / Math.max(0.001, controls.scaleY)) *
+    (H / (R * 2)); // mm aspect → % of vessel image width
   const bodyMid = (bodyTop + bodyBot) / 2;
   const ly = bodyMid - lh / 2 + controls.offsetY * 50;
   const ly2 = ly + lh;
 
-  const visFrac = Math.min(1, Math.max(0.001, g.visibleLabelWidth / (R * 2)));
-  const halfVis = (visFrac * 100) / 2;
   const inset = 4;
   const cx = 50 + controls.offsetX * 40;
+  const halfVis = lw / 2;
   const lx = cx - halfVis;
   const lx2 = lx + halfVis * 2;
   // Same bow model as the artwork warp (fraction of label height at the rim)
@@ -1978,11 +1992,15 @@ function printInkColor(controls) {
   return art;
 }
 
-/** Export frame = front-visible warped label band (not full bottle, not flat artboard). */
+/** Export frame = scaled label at native W/H ratio (warped, not bottle mockup). */
 function warpedArtworkExportSize(controls, dpi = 300) {
   const g = bottleGeometry(controls);
-  const mmW = Math.max(5, g.visibleLabelWidth * Math.max(0.2, controls.scaleX));
   const mmH = Math.max(5, g.labelHeight);
+  const aspect = g.labelWidth / Math.max(0.1, g.labelHeight);
+  const mmW = Math.max(
+    5,
+    mmH * aspect * (Math.max(0.2, controls.scaleX) / Math.max(0.2, controls.scaleY)),
+  );
   const wPx = Math.max(64, Math.round((mmW / 25.4) * dpi));
   const hPx = Math.max(64, Math.round((mmH / 25.4) * dpi));
   return {
