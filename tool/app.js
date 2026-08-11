@@ -33,6 +33,7 @@ const els = {
   matchAspect: $("match-aspect"),
   knockoutWhite: $("knockout-white"),
   artColor: $("art-color"),
+  paperColor: $("paper-color"),
   artBlend: $("art-blend"),
   outW: $("out-w"),
   outH: $("out-h"),
@@ -185,6 +186,7 @@ const DEFAULTS = {
   matchAspect: true,
   knockoutWhite: true,
   artColor: "#000000",
+  paperColor: "#ffffff",
   artBlend: "opaque",
   outW: 424,
   outH: 2068,
@@ -428,6 +430,7 @@ function collectSettings() {
     matchAspect: els.matchAspect.checked,
     knockoutWhite: els.knockoutWhite.checked,
     artColor: els.artColor.value,
+    paperColor: els.paperColor.value,
     artBlend: els.artBlend.value,
     outW: els.outW.value,
     outH: els.outH.value,
@@ -468,6 +471,7 @@ function applySettings(s) {
   setCheck(els.matchAspect, "matchAspect");
   setCheck(els.knockoutWhite, "knockoutWhite");
   setVal(els.artColor, "artColor");
+  setVal(els.paperColor, "paperColor");
   if (s.artBlend != null && ART_BLEND_OPS[s.artBlend] && els.artBlend) {
     els.artBlend.value = s.artBlend;
   }
@@ -520,6 +524,7 @@ function readControls() {
     matchAspect: els.matchAspect.checked,
     knockoutWhite: els.knockoutWhite.checked,
     artColor: els.artColor.value || DEFAULTS.artColor,
+    paperColor: els.paperColor?.value || DEFAULTS.paperColor,
     artBlend: resolveArtBlend(els.artBlend?.value || DEFAULTS.artBlend),
     outW: Math.max(64, Math.round(Number(els.outW.value) || DEFAULTS.outW)),
     outH: Math.max(64, Math.round(Number(els.outH.value) || DEFAULTS.outH)),
@@ -545,10 +550,11 @@ function updateLabels() {
   els.fadeStartVal.textContent = `${Math.round(c.fadeStart * 100)}%`;
   els.cropVal.textContent = `${(c.crop * 100).toFixed(1)}%`;
   els.bgColor.disabled = c.bgMode !== "solid";
+  if (els.paperColor) els.paperColor.disabled = c.knockoutWhite;
   const vessel = activeVessel();
   els.bottleStats.textContent =
     `${vessel.name} · Ø${vessel.diameter} × ${vessel.height} mm · circ. ${g.circumference.toFixed(1)} mm`;
-  els.labelArcReadout.textContent = `→ ${g.labelArcDeg.toFixed(1)}° around vessel (${(g.coverage * 100).toFixed(0)}% of circumference)`;
+  els.labelArcReadout.textContent = `${g.labelArcDeg.toFixed(1)}° · ${(g.coverage * 100).toFixed(0)}% of circ.`;
 }
 
 /**
@@ -673,12 +679,13 @@ function styleArtworkSample(rgba, controls) {
   const neutral = chroma < 0.1;
 
   if (!controls.knockoutWhite) {
-    // Still recolor marks so the color picker always works; leave paper as-is
-    // so an opaque PDF page doesn't become a solid artColor plate.
+    // Recolor ink; replace paper with paperColor (keeps label plate on the bottle).
+    const [pr, pg, pb] = hexToRgb(controls.paperColor || "#ffffff");
     let ink = 1 - lum;
     ink = Math.max(0, (ink - 0.04) / 0.96);
-    if (ink < 0.004) return rgba;
-    return [cr, cg, cb, a0 * Math.min(1, ink)];
+    if (ink < 0.004) return [pr, pg, pb, a0];
+    const a = Math.min(1, ink);
+    return [cr * a + pr * (1 - a), cg * a + pg * (1 - a), cb * a + pb * (1 - a), a0];
   }
 
   // Colored fills/strokes are ink even when light (yellow, sky blue, etc.)
@@ -1818,19 +1825,21 @@ function isNearWhiteCss(css) {
   return Math.max(lum, minC) > 0.9;
 }
 
-/** Knock out paper white and recolor remaining ink for vector export. */
+/** Knock out / recolor paper and ink for vector export. */
 function stylePathForArtworkExport(path, controls, inkColor) {
   let fill = path.fill && path.fill !== "none" ? path.fill : "none";
   let stroke = path.stroke && path.stroke !== "none" ? path.stroke : "none";
   const art = inkColor || controls.artColor || "#000000";
+  const paper = controls.paperColor || "#ffffff";
 
-  if (controls.knockoutWhite) {
-    if (fill !== "none" && isNearWhiteCss(fill)) fill = "none";
-    if (stroke !== "none" && isNearWhiteCss(stroke)) stroke = "none";
-  }
+  const stylePaint = (paint) => {
+    if (paint === "none") return paint;
+    if (isNearWhiteCss(paint)) return controls.knockoutWhite ? "none" : paper;
+    return art;
+  };
 
-  if (fill !== "none") fill = art;
-  if (stroke !== "none") stroke = art;
+  fill = stylePaint(fill);
+  stroke = stylePaint(stroke);
 
   return { ...path, fill, stroke };
 }
@@ -2263,6 +2272,7 @@ function resetControls() {
   els.matchAspect.checked = DEFAULTS.matchAspect;
   els.knockoutWhite.checked = DEFAULTS.knockoutWhite;
   els.artColor.value = DEFAULTS.artColor;
+  els.paperColor.value = DEFAULTS.paperColor;
   els.artBlend.value = DEFAULTS.artBlend;
   els.outW.value = vessel.defaultOutW;
   els.outH.value = vessel.defaultOutH;
@@ -2346,6 +2356,7 @@ function bindUi() {
     els.matchAspect,
     els.knockoutWhite,
     els.artColor,
+    els.paperColor,
     els.artBlend,
     els.outW,
     els.outH,

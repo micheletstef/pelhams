@@ -9,63 +9,69 @@
   <body>
     <div class="app">
       <aside class="panel">
-        <h1>Cylinder Wrap</h1>
+        <header class="panel-head">
+          <h1>Cylinder Wrap</h1>
+          <p id="bottle-stats" class="stats"></p>
+        </header>
 
         <fieldset>
           <legend>Vessel</legend>
-          <p>
-            <label>
-              Container
-              <select id="vessel">
-                <option value="bottle75cl" selected>Rheinwein 75cl bottle</option>
-                <option value="keule500">Keule Softdrink 500ml</option>
-                <option value="can330">330 ml aluminum can</option>
-              </select>
-            </label>
-          </p>
-          <p id="bottle-stats" class="stats"></p>
+          <div class="row">
+            <select id="vessel" class="grow">
+              <option value="bottle75cl" selected>Rheinwein 75cl bottle</option>
+              <option value="keule500">Keule Softdrink 500ml</option>
+              <option value="can330">330 ml aluminum can</option>
+            </select>
+          </div>
         </fieldset>
 
         <fieldset>
           <legend>Source</legend>
-          <p>
+          <div class="row">
             <input id="file-input" type="file" accept=".pdf,.svg,application/pdf,image/svg+xml" />
-          </p>
-          <p id="file-label">No file selected</p>
-          <p>
-            <label>PDF page <input id="pdf-page" type="number" min="1" value="1" step="1" size="4" /></label>
-            <label>DPI <input id="source-dpi" type="number" min="72" max="600" value="300" step="1" size="5" /></label>
-          </p>
+          </div>
+          <p id="file-label" class="file-name">No file selected</p>
+          <div class="row">
+            <label class="field">Page <input id="pdf-page" type="number" min="1" value="1" step="1" /></label>
+            <label class="field">DPI <input id="source-dpi" type="number" min="72" max="600" value="300" step="1" /></label>
+          </div>
         </fieldset>
 
         <fieldset>
           <legend>Label</legend>
-          <p>
-            <label>Width <input id="label-width" type="number" min="5" max="2000" value="120" step="0.1" size="6" /></label>
-            <span>mm</span>
-            <small id="label-arc-readout"></small>
-          </p>
-          <p>
-            <label>Height <input id="label-height" type="number" min="5" max="1000" value="105" step="0.1" size="6" /></label>
-            <span>mm</span>
-          </p>
-          <p>
-            <label>Rotate <input id="rotate" type="range" min="-180" max="180" value="0" step="0.1" /></label>
-            <span id="rotate-val">0°</span>
-            <small>(spin around vessel)</small>
-          </p>
-          <p>
-            <label>Offset Y <input id="offset-y" type="range" min="-100" max="100" value="0" step="0.1" /></label>
-            <span id="offset-y-val">0%</span>
-          </p>
-          <p>
-            <label>Artwork color <input id="art-color" type="color" value="#000000" /></label>
-          </p>
-          <p>
-            <label><input id="knockout-white" type="checkbox" checked /> Knock out white background</label>
-          </p>
-          <p>
-            <label>
+          <div class="row">
+            <label class="field">W <input id="label-width" type="number" min="5" max="2000" value="120" step="0.1" /> mm</label>
+            <label class="field">H <input id="label-height" type="number" min="5" max="1000" value="105" step="0.1" /> mm</label>
+          </div>
+          <p id="label-arc-readout" class="stats muted"></p>
+
+          <div class="slider-row">
+            <span class="slider-label">Rotate</span>
+            <input id="rotate" type="range" min="-180" max="180" value="0" step="0.1" />
+            <span id="rotate-val" class="val">0°</span>
+          </div>
+          <div class="slider-row">
+            <span class="slider-label">Offset Y</span>
+            <input id="offset-y" type="range" min="-100" max="100" value="0" step="0.1" />
+            <span id="offset-y-val" class="val">0%</span>
+          </div>
+
+          <div class="row colors">
+            <label class="swatch">
+              Ink
+              <input id="art-color" type="color" value="#000000" />
+            </label>
+            <label class="swatch">
+              Paper
+              <input id="paper-color" type="color" value="#ffffff" />
+            </label>
+            <label class="check">
+              <input id="knockout-white" type="checkbox" checked />
+              Knock out paper
+            </label>
+          </div>
+          <div class="row">
+            <label class="field grow">
               Blend
               <select id="art-blend">
                 <option value="opaque" selected>Opaque</option>
@@ -80,98 +86,98 @@
                 <option value="color-dodge">Color dodge</option>
               </select>
             </label>
-            <small>(how ink sits on the mockup)</small>
-          </p>
+          </div>
+          <div class="checks">
+            <label class="check"><input id="show-mockup" type="checkbox" checked /> Mockup</label>
+            <label class="check"><input id="show-guides" type="checkbox" /> Guides</label>
+            <label class="check"><input id="clip-cylinder" type="checkbox" checked /> Clip</label>
+            <label class="check"><input id="match-aspect" type="checkbox" checked /> Match aspect</label>
+          </div>
         </fieldset>
 
-        <fieldset>
-          <legend>Projection</legend>
-          <p>
-            <label>Wrap <input id="curvature" type="range" min="0" max="1" value="1" step="0.01" /></label>
-            <span id="curvature-val">1.00</span>
-            <small>(0 = flat, 1 = true cylinder)</small>
-          </p>
-          <p>
-            <label>Edge squash <input id="edge-warp" type="range" min="0.5" max="2" value="1" step="0.01" /></label>
-            <span id="edge-warp-val">1.00</span>
-          </p>
-          <p>
-            <label>Horiz. curve <input id="v-bow" type="range" min="-1" max="1" value="0" step="0.01" /></label>
-            <span id="v-bow-val">0.00</span>
-          </p>
-          <p>
-            <label>Perspective <input id="perspective" type="range" min="0" max="1.5" value="0" step="0.01" /></label>
-            <span id="perspective-val">0.00</span>
-          </p>
-          <p>
-            <label>Scale X <input id="scale-x" type="range" min="0.2" max="3" value="1" step="0.01" /></label>
-            <span id="scale-x-val">1.00</span>
-          </p>
-          <p>
-            <label>Scale Y <input id="scale-y" type="range" min="0.2" max="3" value="1" step="0.01" /></label>
-            <span id="scale-y-val">1.00</span>
-          </p>
-          <p>
-            <label>Offset X <input id="offset-x" type="range" min="-100" max="100" value="0" step="0.1" /></label>
-            <span id="offset-x-val">0%</span>
-          </p>
-        </fieldset>
+        <details class="fold" open>
+          <summary>Projection</summary>
+          <div class="slider-row">
+            <span class="slider-label">Wrap</span>
+            <input id="curvature" type="range" min="0" max="1" value="1" step="0.01" />
+            <span id="curvature-val" class="val">1.00</span>
+          </div>
+          <div class="slider-row">
+            <span class="slider-label">Edge squash</span>
+            <input id="edge-warp" type="range" min="0.5" max="2" value="1" step="0.01" />
+            <span id="edge-warp-val" class="val">1.00</span>
+          </div>
+          <div class="slider-row">
+            <span class="slider-label">H. curve</span>
+            <input id="v-bow" type="range" min="-1" max="1" value="0" step="0.01" />
+            <span id="v-bow-val" class="val">0.00</span>
+          </div>
+          <div class="slider-row">
+            <span class="slider-label">Perspective</span>
+            <input id="perspective" type="range" min="0" max="1.5" value="0" step="0.01" />
+            <span id="perspective-val" class="val">0.00</span>
+          </div>
+          <div class="slider-row">
+            <span class="slider-label">Scale X</span>
+            <input id="scale-x" type="range" min="0.2" max="3" value="1" step="0.01" />
+            <span id="scale-x-val" class="val">1.00</span>
+          </div>
+          <div class="slider-row">
+            <span class="slider-label">Scale Y</span>
+            <input id="scale-y" type="range" min="0.2" max="3" value="1" step="0.01" />
+            <span id="scale-y-val" class="val">1.00</span>
+          </div>
+          <div class="slider-row">
+            <span class="slider-label">Offset X</span>
+            <input id="offset-x" type="range" min="-100" max="100" value="0" step="0.1" />
+            <span id="offset-x-val" class="val">0%</span>
+          </div>
+        </details>
 
-        <fieldset>
-          <legend>Shading & crop</legend>
-          <p>
-            <label>Edge fade <input id="edge-fade" type="range" min="0" max="1" value="0" step="0.01" /></label>
-            <span id="edge-fade-val">0.00</span>
-          </p>
-          <p>
-            <label>Fade start <input id="fade-start" type="range" min="0" max="100" value="60" step="1" /></label>
-            <span id="fade-start-val">60%</span>
-          </p>
-          <p>
-            <label>Crop sides <input id="crop" type="range" min="0" max="40" value="0" step="0.5" /></label>
-            <span id="crop-val">0%</span>
-          </p>
-          <p>
-            <label><input id="clip-cylinder" type="checkbox" checked /> Clip to cylinder</label>
-          </p>
-          <p>
-            <label><input id="show-guides" type="checkbox" /> Show guides</label>
-          </p>
-          <p>
-            <label><input id="show-mockup" type="checkbox" checked /> Superimpose on mockup</label>
-          </p>
-          <p>
-            <label><input id="match-aspect" type="checkbox" checked /> Match output to vessel aspect</label>
-          </p>
-        </fieldset>
+        <details class="fold">
+          <summary>Shading &amp; crop</summary>
+          <div class="slider-row">
+            <span class="slider-label">Edge fade</span>
+            <input id="edge-fade" type="range" min="0" max="1" value="0" step="0.01" />
+            <span id="edge-fade-val" class="val">0.00</span>
+          </div>
+          <div class="slider-row">
+            <span class="slider-label">Fade start</span>
+            <input id="fade-start" type="range" min="0" max="100" value="60" step="1" />
+            <span id="fade-start-val" class="val">60%</span>
+          </div>
+          <div class="slider-row">
+            <span class="slider-label">Crop sides</span>
+            <input id="crop" type="range" min="0" max="40" value="0" step="0.5" />
+            <span id="crop-val" class="val">0%</span>
+          </div>
+        </details>
 
         <fieldset>
           <legend>Output</legend>
-          <p>
-            <label>Width <input id="out-w" type="number" min="200" max="8000" value="424" step="1" size="6" /></label>
-            <label>Height <input id="out-h" type="number" min="200" max="8000" value="2068" step="1" size="6" /></label>
-          </p>
-          <p>
-            <label>
-              Background
+          <div class="row">
+            <label class="field">W <input id="out-w" type="number" min="200" max="8000" value="424" step="1" /></label>
+            <label class="field">H <input id="out-h" type="number" min="200" max="8000" value="2068" step="1" /></label>
+          </div>
+          <div class="row">
+            <label class="field grow">
+              BG
               <select id="bg-mode">
                 <option value="transparent" selected>Transparent</option>
                 <option value="solid">Solid</option>
               </select>
             </label>
             <input id="bg-color" type="color" value="#808080" disabled />
-          </p>
-          <p>
-            <label>Path detail <input id="path-detail" type="number" min="4" max="40" value="12" step="1" size="4" /></label>
-          </p>
-          <p>
-            <button type="button" id="btn-reset">Reset</button>
-            <button type="button" id="btn-export" disabled>Export PNG</button>
-            <button type="button" id="btn-export-pdf" disabled>Export warped PDF</button>
-            <button type="button" id="btn-export-svg" disabled>Export warped SVG</button>
+            <label class="field">Paths <input id="path-detail" type="number" min="4" max="40" value="12" step="1" /></label>
+          </div>
+          <div class="btn-row">
+            <button type="button" id="btn-export" disabled>PNG</button>
+            <button type="button" id="btn-export-pdf" disabled>PDF</button>
+            <button type="button" id="btn-export-svg" disabled>SVG</button>
             <button type="button" id="btn-fit" disabled>Fit</button>
             <button type="button" id="btn-redraw" disabled>Redraw</button>
-          </p>
+            <button type="button" id="btn-reset">Reset</button>
+          </div>
         </fieldset>
       </aside>
 
@@ -198,6 +204,6 @@
       </main>
     </div>
 
-    <script type="module" src="app.js?v=20260811-artblend"></script>
+    <script type="module" src="app.js?v=20260811-compact-ui"></script>
   </body>
 </html>
