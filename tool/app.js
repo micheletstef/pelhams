@@ -197,9 +197,10 @@ function syncVesselFinishUi(vessel = activeVessel()) {
   const row = els.vesselFinishRow;
   const select = els.vesselFinish;
   if (!row || !select) return;
-  const hasFinishes = vesselHasFinishes(vessel);
-  row.hidden = !hasFinishes;
-  if (!hasFinishes) return;
+  // Finish options are only for the 330 ml can.
+  const showFinish = vessel?.id === "can330" && vesselHasFinishes(vessel);
+  row.hidden = !showFinish;
+  if (!showFinish) return;
 
   const finishIds = Object.keys(vessel.finishes);
   const optionsMatch =
@@ -274,6 +275,44 @@ function resolveExportTarget(value) {
 }
 
 const STORAGE_KEY = "pelham-cylinder-wrap-v1";
+const STORAGE_VERSION = 2;
+
+/** Controls that differ per vessel (scale, warp, placement, sizes, finish). */
+const VESSEL_SETTING_KEYS = [
+  "vesselFinish",
+  "labelWidth",
+  "labelHeight",
+  "lockLabelSize",
+  "labelScale",
+  "projectionEnabled",
+  "shadingEnabled",
+  "edgeCurve",
+  "innerCurve",
+  "curveStart",
+  "curveBlend",
+  "vertCurve",
+  "rotate",
+  "offsetX",
+  "offsetY",
+  "edgeFade",
+  "fadeStart",
+  "crop",
+  "showMockup",
+  "outW",
+  "outH",
+];
+
+/** Artwork / export controls shared across vessels. */
+const GLOBAL_SETTING_KEYS = [
+  "knockoutWhite",
+  "artColor",
+  "paperColor",
+  "artBlend",
+  "exportTarget",
+  "pdfPage",
+  "sourceDpi",
+];
+
 const MM_TO_PT = 72 / 25.4;
 
 /** UI blend id → canvas globalCompositeOperation */
@@ -412,11 +451,44 @@ function applyVesselLabelDefaults(vessel = activeVessel()) {
   els.outH.value = String(vessel.defaultOutH);
 }
 
+/** Fresh vessel visit: vessel knobs → defaults, then catalog label/out sizes. */
+function applyFreshVesselSettings(vessel = activeVessel()) {
+  const finish =
+    vessel.defaultFinish && vessel.finishes?.[vessel.defaultFinish]
+      ? vessel.defaultFinish
+      : DEFAULTS.vesselFinish;
+  applySettings({
+    ...pickSettingKeys(DEFAULTS, VESSEL_SETTING_KEYS),
+    vesselFinish: finish,
+    labelWidth: vessel.defaultLabelWidth,
+    labelHeight: vessel.defaultLabelHeight,
+    outW: vessel.defaultOutW,
+    outH: vessel.defaultOutH,
+  });
+  applyVesselLabelDefaults(vessel);
+}
+
+/** Last committed vessel id — select value changes before the `change` handler runs. */
+let committedVesselId = DEFAULT_VESSEL_ID;
+
 async function switchVessel(vesselId, { applyLabelDefaults = true } = {}) {
   if (!VESSELS[vesselId]) vesselId = DEFAULT_VESSEL_ID;
+  // Persist knobs under the vessel we're leaving (DOM may already show the new id).
+  if (committedVesselId && VESSELS[committedVesselId] && committedVesselId !== vesselId) {
+    saveSettings({ vesselId: committedVesselId });
+  }
   els.vessel.value = vesselId;
   syncVesselFinishUi();
-  if (applyLabelDefaults) applyVesselLabelDefaults();
+
+  const store = readSettingsStore();
+  const saved = store.byVessel[vesselId];
+  if (saved) {
+    applySettings({ vessel: vesselId, ...store.global, ...saved });
+  } else if (applyLabelDefaults) {
+    applyFreshVesselSettings();
+  }
+
+  committedVesselId = vesselId;
   setStatus(`Loading ${activeVessel().name}…`);
   await loadMockup();
   saveSettings();
@@ -671,6 +743,58 @@ function collectSettings() {
   };
 }
 
+function pickSettingKeys(obj, keys) {
+  const out = {};
+  if (!obj || typeof obj !== "object") return out;
+  for (const key of keys) {
+    if (obj[key] != null) out[key] = obj[key];
+  }
+  return out;
+}
+
+function emptySettingsStore() {
+  return {
+    version: STORAGE_VERSION,
+    activeVessel: DEFAULT_VESSEL_ID,
+    global: {},
+    byVessel: {},
+  };
+}
+
+/** Migrate flat v1 blobs into per-vessel store shape. */
+function migrateSettingsStore(parsed) {
+  if (parsed?.version === STORAGE_VERSION && parsed.byVessel && typeof parsed.byVessel === "object") {
+    return {
+      version: STORAGE_VERSION,
+      activeVessel:
+        parsed.activeVessel && VESSELS[parsed.activeVessel]
+          ? parsed.activeVessel
+          : DEFAULT_VESSEL_ID,
+      global: pickSettingKeys(parsed.global || {}, GLOBAL_SETTING_KEYS),
+      byVessel: parsed.byVessel,
+    };
+  }
+
+  const store = emptySettingsStore();
+  if (!parsed || typeof parsed !== "object") return store;
+  const vessel =
+    parsed.vessel && VESSELS[parsed.vessel] ? parsed.vessel : DEFAULT_VESSEL_ID;
+  store.activeVessel = vessel;
+  store.global = pickSettingKeys(parsed, GLOBAL_SETTING_KEYS);
+  store.byVessel[vessel] = pickSettingKeys(parsed, VESSEL_SETTING_KEYS);
+  return store;
+}
+
+function readSettingsStore() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return emptySettingsStore();
+    return migrateSettingsStore(JSON.parse(raw));
+  } catch {
+    return emptySettingsStore();
+  }
+}
+
 function applySettings(s) {
   if (!s || typeof s !== "object") return;
   const setVal = (el, key) => {
@@ -719,9 +843,31 @@ function applySettings(s) {
   setVal(els.sourceDpi, "sourceDpi");
 }
 
-function saveSettings() {
+/**
+ * Persist current controls.
+ * @param {{ vesselId?: string }} [opts] — store vessel knobs under this id
+ *   (defaults to the select value). Use when the select already moved but
+ *   the visible knobs still belong to the previous vessel.
+ */
+function saveSettings({ vesselId } = {}) {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(collectSettings()));
+    const all = collectSettings();
+    const sliceId =
+      vesselId && VESSELS[vesselId]
+        ? vesselId
+        : all.vessel && VESSELS[all.vessel]
+          ? all.vessel
+          : DEFAULT_VESSEL_ID;
+    const activeId =
+      all.vessel && VESSELS[all.vessel] ? all.vessel : sliceId;
+    const store = readSettingsStore();
+    store.activeVessel = activeId;
+    store.global = {
+      ...store.global,
+      ...pickSettingKeys(all, GLOBAL_SETTING_KEYS),
+    };
+    store.byVessel[sliceId] = pickSettingKeys(all, VESSEL_SETTING_KEYS);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
   } catch {
     /* ignore quota / private mode */
   }
@@ -729,9 +875,18 @@ function saveSettings() {
 
 function loadSettings() {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return;
-    applySettings(JSON.parse(raw));
+    const store = readSettingsStore();
+    const vesselId =
+      store.activeVessel && VESSELS[store.activeVessel]
+        ? store.activeVessel
+        : DEFAULT_VESSEL_ID;
+    const vesselSettings = store.byVessel[vesselId] || {};
+    applySettings({
+      vessel: vesselId,
+      ...store.global,
+      ...vesselSettings,
+    });
+    committedVesselId = vesselId;
   } catch {
     /* ignore corrupt data */
   }
@@ -2610,7 +2765,8 @@ function drawWarpedPathOnJsPdf(doc, d, styled, strokeScale, ox = 0, oy = 0) {
   }
   if (hasStroke) {
     const rgb = parseCssRgb(styled.stroke) || [0, 0, 0];
-    doc.setStrokeColor(rgb[0], rgb[1], rgb[2]);
+    // jsPDF stroke color API is setDrawColor (not setStrokeColor)
+    doc.setDrawColor(rgb[0], rgb[1], rgb[2]);
     const sw = Math.max(0.1, (styled.strokeWidth || 1) * strokeScale);
     doc.setLineWidth(sw);
   }
@@ -2653,13 +2809,7 @@ async function exportWarpedArtworkPdfFromPaths(pathSet, controls) {
   const strokeScale = fullW / Math.max(1, srcW);
 
   const doc = new jsPDFCtor({ unit: "pt", format: [w, h], compress: true });
-  // Clip to bottle-visible frame (matches raster trim)
-  try {
-    doc.rect(0, 0, w, h);
-    doc.clip();
-  } catch {
-    /* older jsPDF without clip — page size already trims */
-  }
+  // Paths are already shifted by x0 into the visible page; page size is the bottle face.
 
   let pathCount = 0;
   for (const src of paths) {
@@ -2751,7 +2901,27 @@ async function exportPdf() {
   try {
     const pathSet = await getVectorPathSet();
     setStatus(`Warping ${pathSet.paths.length} vector paths…`);
-    const result = await exportWarpedArtworkPdfFromPaths(pathSet, controls);
+
+    let result;
+    try {
+      result = await exportWarpedArtworkPdfFromPaths(pathSet, controls);
+    } catch (directErr) {
+      // Fallback: warped SVG → svg2pdf (still true vectors, selectable in Illustrator)
+      console.warn("Direct path PDF failed, trying svg2pdf:", directErr);
+      setStatus("Building vector PDF via SVG…");
+      const svgResult = buildWarpedArtworkSvg(pathSet, controls);
+      if (!svgResult) throw directErr;
+      const blob = await svgTextToPdfBlob(svgResult.svgText, svgResult.pageWpt, svgResult.pageHpt);
+      result = {
+        blob,
+        mmW: svgResult.mmW,
+        mmH: svgResult.mmH,
+        pathCount: pathSet.paths.length,
+        pageWpt: svgResult.pageWpt,
+        pageHpt: svgResult.pageHpt,
+      };
+    }
+
     if (!result.blob || result.blob.size < 100) throw new Error("PDF export produced an empty file");
 
     downloadBlob(result.blob, `${exportBaseName()}-warped-${exportStamp()}.pdf`);
@@ -2816,20 +2986,36 @@ async function svgTextToPdfBlob(svgText, pageWpt, pageHpt) {
   return doc.output("blob");
 }
 
+const _scriptLoads = new Map();
+
 function loadScriptOnce(id, src) {
-  return new Promise((resolve, reject) => {
-    if (document.getElementById(id)) {
-      resolve();
-      return;
+  const existing = document.getElementById(id);
+  if (existing?.dataset.loaded === "1") return Promise.resolve();
+  if (_scriptLoads.has(id)) return _scriptLoads.get(id);
+
+  const p = new Promise((resolve, reject) => {
+    let s = existing;
+    if (!s) {
+      s = document.createElement("script");
+      s.id = id;
+      s.src = src;
+      s.async = true;
+      document.head.appendChild(s);
     }
-    const s = document.createElement("script");
-    s.id = id;
-    s.src = src;
-    s.async = true;
-    s.onload = () => resolve();
-    s.onerror = () => reject(new Error(`Failed to load ${src}`));
-    document.head.appendChild(s);
+    s.onload = () => {
+      s.dataset.loaded = "1";
+      resolve();
+    };
+    s.onerror = () => {
+      _scriptLoads.delete(id);
+      s.remove();
+      reject(new Error(`Failed to load ${src}`));
+    };
+    // Already finished before listeners attached
+    if (s.dataset.loaded === "1") resolve();
   });
+  _scriptLoads.set(id, p);
+  return p;
 }
 
 async function loadSvgFile(file) {
