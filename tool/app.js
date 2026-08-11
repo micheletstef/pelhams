@@ -1091,14 +1091,14 @@ function mapNxToSource(nx, edgeCurve, curveStart, innerCurve = 0, curveBlend = 0
 
 /**
  * Vertical bow magnitude across full width (fraction of band height).
- * 0 at center → full at L/R edges. Sign: + → top sides up / bottom sides down; − flips.
+ * Parabolic nx² belly: flat at center, rounds out to L/R (not a linear slant).
+ * Sign: + → top sides up / bottom sides down; − flips.
  */
 function verticalCurveAmount(nx, vertCurve) {
   const amt = Math.max(-1, Math.min(1, vertCurve));
   if (Math.abs(amt) <= 1e-6) return 0;
-  const t = Math.abs(Math.max(-1, Math.min(1, nx)));
-  // Smooth ramp center → rim so the bow runs through the whole artwork
-  return amt * 0.22 * (t * t * (3 - 2 * t));
+  const x = Math.max(-1, Math.min(1, nx));
+  return amt * 0.3 * (x * x);
 }
 
 function mapSourceToNx(s, edgeCurve, curveStart, innerCurve = 0, curveBlend = 0) {
@@ -1574,9 +1574,10 @@ function sampleSourceUV(nx, ny, controls) {
   );
   const bow = verticalCurveAmount(nx, controls.vertCurve);
   let u = s * 0.5;
-  // +vertCurve: top L/R up, bottom L/R down (opposite bows); − flips
-  const denom = 1 + 2 * bow;
-  const texV = Math.abs(denom) > 1e-6 ? (ny + bow) / denom : ny;
+  // Barrel about vertical center: ny = 0.5 + (v-0.5)*(1+2*bow)
+  // +vertCurve: top L/R up, bottom L/R down; − flips
+  const scale = 1 + 2 * bow;
+  const texV = Math.abs(scale) > 1e-6 ? 0.5 + (ny - 0.5) / scale : ny;
   let v = texV - 0.5;
   if (rotateRad) {
     const c = Math.cos(-rotateRad);
@@ -1611,9 +1612,9 @@ function sourceUVToOutputXY(u, v, controls, outW, outH) {
     controls.curveBlend,
   );
   const bow = verticalCurveAmount(nx, controls.vertCurve);
-  // Inverse of sampleSourceUV vert bow: top/bottom sides curve opposite ways
+  // Inverse of sampleSourceUV barrel bow
   const srcV = vv + 0.5;
-  const ny = srcV - bow * (1 - 2 * srcV);
+  const ny = 0.5 + (srcV - 0.5) * (1 + 2 * bow);
   const usableHalf = Math.max(0.01, 1 - controls.crop);
   return {
     x: ((nx * usableHalf + 1) / 2) * outW,
