@@ -20,6 +20,7 @@ const els = {
   btnNativeSize: $("btn-native-size"),
   labelArcReadout: $("label-arc-readout"),
   projectionEnabled: $("projection-enabled"),
+  btnResetProjection: $("btn-reset-projection"),
   curvature: $("curvature"),
   edgeWarp: $("edge-warp"),
   vBow: $("v-bow"),
@@ -2532,23 +2533,28 @@ async function reloadPdfPage() {
   }
 }
 
-function resetControls() {
-  const vessel = activeVessel();
-  els.lockLabelSize.checked = DEFAULTS.lockLabelSize;
-  els.labelScale.value = DEFAULTS.labelScale;
+function resetProjection() {
   els.projectionEnabled.checked = DEFAULTS.projectionEnabled;
-  if (!applyNativeLabelSize({ force: true })) {
-    els.labelWidth.value = vessel.defaultLabelWidth;
-    els.labelHeight.value = vessel.defaultLabelHeight;
-  }
   els.curvature.value = DEFAULTS.curvature;
   els.edgeWarp.value = DEFAULTS.edgeWarp;
   els.vBow.value = DEFAULTS.vBow;
   els.perspective.value = DEFAULTS.perspective;
   els.scaleX.value = DEFAULTS.scaleX;
   els.scaleY.value = DEFAULTS.scaleY;
-  els.rotate.value = DEFAULTS.rotate;
   els.offsetX.value = DEFAULTS.offsetX;
+  syncProjectionUi();
+}
+
+function resetControls() {
+  const vessel = activeVessel();
+  els.lockLabelSize.checked = DEFAULTS.lockLabelSize;
+  els.labelScale.value = DEFAULTS.labelScale;
+  if (!applyNativeLabelSize({ force: true })) {
+    els.labelWidth.value = vessel.defaultLabelWidth;
+    els.labelHeight.value = vessel.defaultLabelHeight;
+  }
+  resetProjection();
+  els.rotate.value = DEFAULTS.rotate;
   els.offsetY.value = DEFAULTS.offsetY;
   els.edgeFade.value = DEFAULTS.edgeFade;
   els.fadeStart.value = DEFAULTS.fadeStart;
@@ -2671,6 +2677,15 @@ function bindUi() {
     setStatus(
       `Label size set to native ${sourceNativeMm.w}×${sourceNativeMm.h} mm`,
     );
+  });
+
+  els.btnResetProjection.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    resetProjection();
+    saveSettings();
+    scheduleRender();
+    setStatus("Projection reset");
   });
 
   els.pdfPage.addEventListener("change", () => {
