@@ -44,6 +44,7 @@ const els = {
   crop: $("crop"),
   showMockup: $("show-mockup"),
   knockoutWhite: $("knockout-white"),
+  useArtworkColors: $("use-artwork-colors"),
   artColor: $("art-color"),
   paperColor: $("paper-color"),
   artBlend: $("art-blend"),
@@ -255,6 +256,7 @@ const DEFAULTS = {
   crop: 0,
   showMockup: true,
   knockoutWhite: true,
+  useArtworkColors: false,
   artColor: "#000000",
   paperColor: "#ffffff",
   artBlend: "opaque",
@@ -305,6 +307,7 @@ const VESSEL_SETTING_KEYS = [
 /** Artwork / export controls shared across vessels. */
 const GLOBAL_SETTING_KEYS = [
   "knockoutWhite",
+  "useArtworkColors",
   "artColor",
   "paperColor",
   "artBlend",
@@ -746,6 +749,7 @@ function collectSettings() {
     crop: els.crop.value,
     showMockup: els.showMockup.checked,
     knockoutWhite: els.knockoutWhite.checked,
+    useArtworkColors: els.useArtworkColors?.checked ?? false,
     artColor: els.artColor.value,
     paperColor: els.paperColor.value,
     artBlend: els.artBlend.value,
@@ -843,6 +847,7 @@ function applySettings(s) {
   syncSectionToggles();
   setCheck(els.showMockup, "showMockup");
   setCheck(els.knockoutWhite, "knockoutWhite");
+  setCheck(els.useArtworkColors, "useArtworkColors");
   setVal(els.artColor, "artColor");
   setVal(els.paperColor, "paperColor");
   if (s.artBlend != null && ART_BLEND_OPS[s.artBlend] && els.artBlend) {
@@ -945,6 +950,7 @@ function readControls() {
     clipCylinder: true,
     showMockup: els.showMockup.checked,
     knockoutWhite: els.knockoutWhite.checked,
+    useArtworkColors: els.useArtworkColors?.checked ?? false,
     artColor: els.artColor.value || DEFAULTS.artColor,
     paperColor: els.paperColor?.value || DEFAULTS.paperColor,
     artBlend: resolveArtBlend(els.artBlend?.value || DEFAULTS.artBlend),
@@ -983,7 +989,8 @@ function updateLabels() {
   els.fadeStartVal.textContent = `${Math.round(c.fadeStart * 100)}%`;
   els.cropVal.textContent = `${(c.crop * 100).toFixed(1)}%`;
   if (els.labelScaleVal) els.labelScaleVal.textContent = `${Math.round(c.labelScale * 100)}%`;
-  if (els.paperColor) els.paperColor.disabled = c.knockoutWhite;
+  if (els.artColor) els.artColor.disabled = c.useArtworkColors;
+  if (els.paperColor) els.paperColor.disabled = c.useArtworkColors || c.knockoutWhite;
   const mockupExport = c.exportTarget === "mockup";
   if (els.outW) els.outW.disabled = !mockupExport;
   if (els.outH) els.outH.disabled = !mockupExport;
@@ -1164,22 +1171,43 @@ function hexToRgb(hex) {
 }
 
 /**
- * Recolor artwork with artColor. Optionally knock out neutral paper so the
- * PDF/SVG page fill doesn't cover the bottle.
+ * Recolor artwork with artColor, or keep source colors when useArtworkColors.
+ * Optionally knock out neutral paper so the PDF/SVG page fill doesn't cover the bottle.
  *
  * Paper = bright + near-neutral (typical PDF page gray). Chromatic pixels are
  * always kept as ink even when light, so brand colors don't vanish.
  * Opaque blend → solid ink (full alpha); other blends keep soft luminance coverage.
  */
 function styleArtworkSample(rgba, controls) {
-  const [cr, cg, cb] = hexToRgb(controls.artColor);
   const a0 = rgba[3];
-  if (a0 < 0.5) return [cr, cg, cb, 0];
-  const solidInk = resolveArtBlend(controls.artBlend) === "opaque";
-
   const r = rgba[0];
   const g = rgba[1];
   const b = rgba[2];
+
+  if (controls.useArtworkColors) {
+    if (a0 < 0.5) return [r, g, b, 0];
+    if (!controls.knockoutWhite) return [r, g, b, a0];
+    const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+    const minC = Math.min(r, g, b) / 255;
+    const maxC = Math.max(r, g, b) / 255;
+    const chroma = maxC - minC;
+    if (chroma >= 0.1) return [r, g, b, a0];
+    const paper = Math.max(lum, minC);
+    let ink = 1 - paper;
+    ink = Math.max(0, (ink - 0.08) / 0.92);
+    if (ink < 0.004) return [r, g, b, 0];
+    const solidInk = resolveArtBlend(controls.artBlend) === "opaque";
+    if (solidInk) {
+      const cover = ink < 0.22 ? ink / 0.22 : 1;
+      return [r, g, b, a0 * cover];
+    }
+    return [r, g, b, a0 * ink];
+  }
+
+  const [cr, cg, cb] = hexToRgb(controls.artColor);
+  if (a0 < 0.5) return [cr, cg, cb, 0];
+  const solidInk = resolveArtBlend(controls.artBlend) === "opaque";
+
   const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
   const minC = Math.min(r, g, b) / 255;
   const maxC = Math.max(r, g, b) / 255;
@@ -2498,13 +2526,14 @@ function isNearWhiteCss(css) {
 function stylePathForArtworkExport(path, controls, inkColor) {
   let fill = path.fill && path.fill !== "none" ? path.fill : "none";
   let stroke = path.stroke && path.stroke !== "none" ? path.stroke : "none";
+  const keepArt = !!controls.useArtworkColors;
   const art = inkColor || controls.artColor || "#000000";
   const paper = controls.paperColor || "#ffffff";
 
   const stylePaint = (paint) => {
     if (paint === "none") return paint;
-    if (isNearWhiteCss(paint)) return controls.knockoutWhite ? "none" : paper;
-    return art;
+    if (isNearWhiteCss(paint)) return controls.knockoutWhite ? "none" : keepArt ? paint : paper;
+    return keepArt ? paint : art;
   };
 
   fill = stylePaint(fill);
@@ -2515,6 +2544,7 @@ function stylePathForArtworkExport(path, controls, inkColor) {
 
 /** Ink color for print PDF — light mockup colors become black so the file isn't blank. */
 function printInkColor(controls) {
+  if (controls.useArtworkColors) return null;
   const art = controls.artColor || "#000000";
   if (isNearWhiteCss(art)) return "#000000";
   const rgb = parseCssRgb(art);
@@ -2611,9 +2641,10 @@ function warpedArtworkExportSize(controls, dpi = 300) {
 }
 
 function warpControlsForExport(controls) {
+  const ink = printInkColor(controls);
   return {
     ...controls,
-    artColor: printInkColor(controls),
+    ...(ink ? { artColor: ink } : {}),
     bgMode: "transparent",
   };
 }
@@ -2936,7 +2967,8 @@ async function exportPdf() {
     if (!result.blob || result.blob.size < 100) throw new Error("PDF export produced an empty file");
 
     downloadBlob(result.blob, `${exportBaseName()}-warped-${exportStamp()}.pdf`);
-    const inkNote = isNearWhiteCss(controls.artColor) ? " · ink black" : "";
+    const inkNote =
+      !controls.useArtworkColors && isNearWhiteCss(controls.artColor) ? " · ink black" : "";
     setStatus(
       `Exported vector PDF ${result.mmW.toFixed(1)}×${result.mmH.toFixed(1)} mm` +
         ` (${result.pathCount} paths · ${(result.blob.size / 1024).toFixed(0)} KB${inkNote})`,
@@ -3207,6 +3239,7 @@ function resetControls() {
   els.showMockup.checked = DEFAULTS.showMockup;
   syncSectionToggles();
   els.knockoutWhite.checked = DEFAULTS.knockoutWhite;
+  if (els.useArtworkColors) els.useArtworkColors.checked = DEFAULTS.useArtworkColors;
   els.artColor.value = DEFAULTS.artColor;
   els.paperColor.value = DEFAULTS.paperColor;
   els.artBlend.value = DEFAULTS.artBlend;
@@ -3285,13 +3318,14 @@ function bindUi() {
     els.crop,
     els.showMockup,
     els.knockoutWhite,
+    els.useArtworkColors,
     els.artColor,
     els.paperColor,
     els.artBlend,
     els.exportTarget,
     els.outW,
     els.outH,
-  ];
+  ].filter(Boolean);
   live.forEach((el) => {
     el.addEventListener("input", persistAndRender);
     el.addEventListener("change", persistAndRender);
