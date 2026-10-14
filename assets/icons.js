@@ -31,7 +31,7 @@
     height = canvas.height = Math.max(1, Math.round(box.height * scale));
   }
 
-  // Draw an icon, contained and centred, as a white silhouette of its alpha
+  // Draw an icon, contained and centred, as a silhouette in the current text colour
   function draw(img) {
     ctx.globalCompositeOperation = 'source-over';
     ctx.clearRect(0, 0, width, height);
@@ -40,7 +40,7 @@
     const h = img.naturalHeight * fit;
     ctx.drawImage(img, (width - w) / 2, (height - h) / 2, w, h);
     ctx.globalCompositeOperation = 'source-in';
-    ctx.fillStyle = '#fff';
+    ctx.fillStyle = getComputedStyle(canvas).color;
     ctx.fillRect(0, 0, width, height);
   }
 
@@ -63,6 +63,10 @@
       resize();
       if (current) draw(current);
     }, 150);
+  });
+
+  document.addEventListener('themechange', () => {
+    if (current) draw(current);
   });
 
   loadImage(ICONS[0]);
