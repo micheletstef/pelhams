@@ -3,141 +3,75 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Pelhams — Brocklesby Park, Lincolnshire</title>
-    <meta name="description" content="Estate produce from Brocklesby Park, Lincolnshire. Honey, cider, eggs and meat from the Pelham family estate, c. 1565." />
-    <meta name="theme-color" content="#fefaf2" />
-    <link rel="icon" href="assets/img/signet.svg" type="image/svg+xml" />
+    <title>Pelhams</title>
+    <meta name="theme-color" content="#0f190f" />
     <link rel="preload" href="assets/fonts/elan-book.woff2" as="font" type="font/woff2" crossorigin />
-    <link rel="stylesheet" href="assets/css/style.css" />
+    <style>
+      @font-face {
+        font-family: "Elan";
+        src: url("assets/fonts/elan-book.woff2") format("woff2");
+        font-display: block;
+      }
+
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+      }
+
+      body {
+        display: grid;
+        place-items: center;
+        background: rgb(15 25 15);
+        color: rgb(254 250 242);
+        -webkit-font-smoothing: antialiased;
+      }
+
+      .lockup {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        margin: 0;
+        font: normal min(10.5vw, 17vh) / 0.93 "Elan", serif;
+        text-align: center;
+        white-space: nowrap;
+      }
+
+      .lockup span {
+        opacity: 0;
+        transform: translateY(0.12em);
+        animation: reveal 1.2s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+      }
+      .lockup span:nth-child(1) { animation-delay: 0.3s; }
+      .lockup span:nth-child(2) { animation-delay: 1.1s; }
+      .lockup span:nth-child(3) { animation-delay: 1.9s; }
+
+      /* Last line sits optically centred */
+      .lockup .nudge {
+        text-indent: -0.42em;
+      }
+
+      @keyframes reveal {
+        to {
+          opacity: 1;
+          transform: none;
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .lockup span {
+          animation: none;
+          opacity: 1;
+          transform: none;
+        }
+      }
+    </style>
   </head>
   <body>
-    <header class="topbar">
-      <p class="topbar__place">
-        <span class="cond">Estate of</span> <span class="ext">BROCKLESBY PARK</span>
-      </p>
-      <nav class="topbar__nav" aria-label="Main">
-        <a href="#range">The Range</a>
-        <a href="#shop">Estate Shop</a>
-        <a href="#contact">Contact</a>
-      </nav>
-    </header>
-
-    <main>
-      <section class="hero">
-        <h1 class="hero__mark">
-          <span class="wordmark" role="img" aria-label="Pelhams"></span>
-        </h1>
-        <p class="hero__lockup" aria-label="Lincolnshire DN41 8PN, Brocklesby Park, Pelhams, c. 1565">
-          <span>LINCOLNSHIRE DN41 8PN</span>
-          <span>BROCKLESBY PARK</span>
-          <span>PELHAMS</span>
-          <span class="nudge">c. 1565</span>
-        </p>
-      </section>
-
-      <div class="frieze" aria-hidden="true"></div>
-
-      <section class="spread" id="estate">
-        <div class="spread__label">
-          <span>The Estate</span>
-          <span>Brocklesby Park</span>
-        </div>
-        <div class="spread__body">
-          <p class="lede">
-            Produce from Brocklesby Park, the Pelham family’s estate in
-            Lincolnshire since <span class="osf">c. 1565</span>. Honey from the
-            wildflower meadows, cider pressed from heritage apples in the
-            historic walled garden, free-range eggs, Lincoln Red beef and
-            venison — each grown, made and packed on the estate, in small
-            quantities and by hand.
-          </p>
-        </div>
-        <figure class="spread__signet">
-          <span class="signet" role="img" aria-label="The Pelhams signet: a pelican feeding its young"></span>
-          <figcaption>
-            <span class="cond">Fig. 25</span>
-            <em>Pelican in her Piety</em>, after a medieval emblematic motif.
-            An emblem of self-sacrifice and nourishment, carried on the Pelham
-            family’s crests since their earliest records.
-          </figcaption>
-        </figure>
-      </section>
-
-      <section class="range" id="range">
-        <header class="range__head">
-          <h2>The Range</h2>
-          <p>Each product carries its own colour, so the range reads at a glance.</p>
-        </header>
-        <ul class="range__grid">
-          <li class="product" style="--tone: var(--floral-pink)">
-            <span class="wordmark" role="img" aria-label="Pelhams"></span>
-            <h3>WILDFLOWER<br />HONEY</h3>
-            <span class="product__fig">21</span>
-          </li>
-          <li class="product" style="--tone: var(--ice-blue)">
-            <span class="wordmark" role="img" aria-label="Pelhams"></span>
-            <h3>HERITAGE<br />APPLE CIDER</h3>
-            <span class="product__fig">25</span>
-          </li>
-          <li class="product" style="--tone: var(--eggshell)">
-            <span class="wordmark" role="img" aria-label="Pelhams"></span>
-            <h3>FREE-RANGE<br />EGGS</h3>
-            <span class="product__fig">23</span>
-          </li>
-          <li class="product" style="--tone: var(--dusk-yellow)">
-            <span class="wordmark" role="img" aria-label="Pelhams"></span>
-            <h3>LEMON &amp;<br />BARLEY WATER</h3>
-            <span class="product__fig">28</span>
-          </li>
-          <li class="product" style="--tone: var(--red-balm)">
-            <span class="wordmark" role="img" aria-label="Pelhams"></span>
-            <h3>LINCOLN RED<br />BEEF</h3>
-            <span class="product__fig">30</span>
-          </li>
-          <li class="product" style="--tone: var(--green-apple)">
-            <span class="wordmark" role="img" aria-label="Pelhams"></span>
-            <h3>GRASS-FED<br />VENISON</h3>
-            <span class="product__fig">33</span>
-          </li>
-        </ul>
-      </section>
-
-      <section class="spread shop" id="shop">
-        <div class="spread__label">
-          <span>Estate Shop</span>
-          <span>Opening Hours</span>
-        </div>
-        <div class="spread__body">
-          <span class="wordmark shop__mark" role="img" aria-label="Pelhams"></span>
-          <dl class="hours">
-            <div><dt>MON–THU</dt><dd>12PM–7PM</dd></div>
-            <div><dt>FRI–SAT</dt><dd>CLOSED</dd></div>
-            <div><dt>SUN</dt><dd>BY APPOINTMENT</dd></div>
-          </dl>
-          <p class="note">
-            Collect from the estate shop, or ask about delivery across
-            Lincolnshire. Bottles and crates can be returned on your next visit.
-          </p>
-        </div>
-      </section>
-
-      <div class="frieze" aria-hidden="true"></div>
-    </main>
-
-    <footer class="footer" id="contact">
-      <p class="footer__lockup" aria-label="Lincolnshire DN41 8PN, Brocklesby Park, Pelhams, c. 1565">
-        <span>LINCOLNSHIRE DN41 8PN</span>
-        <span>BROCKLESBY PARK</span>
-        <span>PELHAMS</span>
-        <span class="nudge">c. 1565</span>
-      </p>
-      <address class="footer__details">
-        <span><span class="ext">BROCKLESBY ACTIVITIES LTD</span></span>
-        <span><span class="cond">Registered in</span> <span class="ext">ENGLAND &amp; WALES</span></span>
-        <span><span class="cond">Company №</span> <span class="ext">GB12226892</span></span>
-        <span><span class="cond">Tel.</span> <a class="ext" href="tel:+441469560214">+44 (0)1469 560214</a></span>
-        <span><span class="cond">Mail</span> <a class="ext" href="mailto:info@pelhams.org">INFO@PELHAMS.ORG</a></span>
-      </address>
-    </footer>
+    <h1 class="lockup" aria-label="Lincolnshire, Pelhams, c. 1565">
+      <span>LINCOLNSHIRE</span>
+      <span>PELHAMS</span>
+      <span class="nudge">c. 1565</span>
+    </h1>
   </body>
 </html>
