@@ -32,7 +32,7 @@
         min-height: 100dvh;
       }
 
-      body.is-complete {
+      body.is-light {
         background: #f2f0ea;
         color: #141414;
       }
@@ -158,17 +158,48 @@
     </div>
     <script>
       (() => {
-        const path = document.querySelector(".signet path");
+        const paths = [...document.querySelectorAll(".signet path")];
+        const path = paths[0];
         const meta = document.querySelector('meta[name="theme-color"]');
-        const complete = () => {
-          document.body.classList.add("is-complete");
-          meta.content = "#f2f0ea";
+        let light = false;
+        let restarting = false;
+
+        const setTheme = (isLight) => {
+          light = isLight;
+          document.body.classList.toggle("is-light", isLight);
+          meta.content = isLight ? "#f2f0ea" : "#000000";
         };
+
+        const reveal = () => {
+          document.body.classList.add("is-complete");
+        };
+
+        const replaySignet = () => {
+          restarting = true;
+          paths.forEach((p) => {
+            p.style.animation = "none";
+          });
+          void path.offsetWidth;
+          paths.forEach((p) => {
+            p.style.animation = "";
+          });
+          requestAnimationFrame(() => {
+            restarting = false;
+          });
+        };
+
         if (!path || matchMedia("(prefers-reduced-motion: reduce)").matches) {
-          complete();
+          reveal();
+          setTheme(true);
           return;
         }
-        path.addEventListener("animationend", complete, { once: true });
+
+        path.addEventListener("animationend", (event) => {
+          if (event.animationName !== "write" || restarting) return;
+          if (!document.body.classList.contains("is-complete")) reveal();
+          setTheme(!light);
+          replaySignet();
+        });
       })();
     </script>
   </body>
