@@ -1,10 +1,11 @@
 DirectoryIndex index.php index.html
 
 <IfModule mod_headers.c>
-  <FilesMatch "\.(html?)$">
+  <FilesMatch "\.(html?|php)$">
     Header set Cache-Control "no-store, no-cache, must-revalidate, max-age=0"
     Header set Pragma "no-cache"
     Header set Expires "0"
+    Header set Surrogate-Control "no-store"
   </FilesMatch>
 </IfModule>
 
