@@ -1,0 +1,15 @@
+DirectoryIndex index.php index.html
+
+<IfModule mod_headers.c>
+  <FilesMatch "\.(html?)$">
+    Header set Cache-Control "no-store, no-cache, must-revalidate, max-age=0"
+    Header set Pragma "no-cache"
+    Header set Expires "0"
+  </FilesMatch>
+</IfModule>
+
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  # Prefer the no-cache PHP wrapper over a bare index.html hit
+  RewriteRule ^index\.html$ index.php [L]
+</IfModule>
