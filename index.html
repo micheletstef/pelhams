@@ -29,8 +29,50 @@
         min-height: 100dvh;
       }
 
-      .lockup {
+      .intro {
         --fs: min(10.5vw, 17vh);
+        --gap: calc(0.25 * var(--fs));
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+      }
+
+      .signet-wrap {
+        position: relative;
+        flex: none;
+        width: clamp(280px, 46vw, 560px);
+        margin-bottom: calc(var(--gap) - 0.0275 * var(--fs));
+      }
+
+      .signet {
+        display: block;
+        width: 100%;
+        overflow: visible;
+      }
+
+      /* Icon area inside the signet, matching the manual's proportions */
+      .icon {
+        position: absolute;
+        left: 14%;
+        top: 11%;
+        width: 72%;
+        height: 78%;
+        color: inherit;
+      }
+
+      .signet path {
+        fill: none;
+        stroke: currentColor;
+        stroke-width: 5.8;
+        stroke-dasharray: 1 2;
+        stroke-dashoffset: 1;
+        animation: write 2.4s cubic-bezier(0.65, 0, 0.35, 1) 0.4s forwards;
+      }
+
+      .lockup {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
         margin: 0;
         font: normal var(--fs) / 0.93 "Elan", serif;
         text-align: center;
@@ -43,7 +85,6 @@
       }
 
       .lockup span {
-        display: block;
         visibility: hidden;
         animation: appear 0s forwards;
       }
@@ -64,7 +105,18 @@
         }
       }
 
+      @keyframes write {
+        to {
+          stroke-dashoffset: 0;
+        }
+      }
+
       @media (prefers-reduced-motion: reduce) {
+        .signet path {
+          animation: none;
+          stroke-dashoffset: 0;
+        }
+
         .lockup span {
           animation: none;
           visibility: visible;
@@ -73,10 +125,20 @@
     </style>
   </head>
   <body>
-    <h1 class="lockup" aria-label="Lincolnshire, Pelhams, c. 1565">
-      <span>LINCOLNSHIRE</span>
-      <span>PELHAMS</span>
-      <span class="nudge">c. 1565</span>
-    </h1>
+    <section class="intro">
+      <div class="signet-wrap">
+        <svg class="signet" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 556.6 464" aria-hidden="true">
+          <path pathLength="1" d="M278.3 3.4C460.5 3.4 553.2 40.9 553.2 232C553.2 423.1 460.5 460.6 278.3 460.6H274.3" />
+          <path pathLength="1" d="M278.3 3.4C96.1 3.4 3.4 40.9 3.4 232C3.4 423.1 96.1 460.6 278.3 460.6H282.3" />
+        </svg>
+        <canvas class="icon" aria-hidden="true"></canvas>
+      </div>
+      <h1 class="lockup" aria-label="Lincolnshire, Pelhams, c. 1565">
+        <span>LINCOLNSHIRE</span>
+        <span>PELHAMS</span>
+        <span class="nudge">c. 1565</span>
+      </h1>
+    </section>
+    <script src="assets/icons.js" defer></script>
   </body>
 </html>
