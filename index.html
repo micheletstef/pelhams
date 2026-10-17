@@ -57,7 +57,7 @@
         stroke-width: 4.2;
         stroke-dasharray: 1 2;
         stroke-dashoffset: 1;
-        animation: write 2.4s linear 1.2s forwards;
+        animation: write 2.4s linear forwards;
       }
 
       .wordmark {
@@ -67,7 +67,7 @@
         width: min(68%, 460px);
         fill: currentColor;
         transform: translateX(-50%);
-        opacity: 0;
+        visibility: hidden;
       }
 
       .lockup {
@@ -105,12 +105,14 @@
         animation-delay: 1.6s;
       }
 
-      body.is-complete .lockup {
-        opacity: 0;
+      body.is-complete .lockup,
+      body.is-complete .lockup span {
+        visibility: hidden !important;
+        animation: none !important;
       }
 
       body.is-complete .wordmark {
-        opacity: 1;
+        visibility: visible;
       }
 
       @keyframes appear {
